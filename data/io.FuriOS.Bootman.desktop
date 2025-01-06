@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Branchy
+Exec=io.FuriOS.StkTool
+Icon=io.FuriOS.StkTool
+Terminal=false
+Type=Application
+StartupNotify=true
+Keywords=stktool;furios;modem
+NoDisplay=true

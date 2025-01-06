@@ -1,0 +1,17 @@
+Source: furios-app-bootman
+Maintainer: Bardia Moshiri <bardia@furilabs.com>
+Section: misc
+Priority: optional
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               python3,
+Standards-Version: 4.5.6
+Vcs-Browser: https://github.com/furilabs/bootman-gui
+Vcs-Git: https://github.com/furilabs/bootman-gui.git
+
+Package: furios-app-bootman
+Architecture: all
+Pre-Depends: ${misc:Pre-Depends}
+Depends: ${misc:Depends},
+         ${python3:Depends},
+Description: Boot manager configuration app for FuriOS
