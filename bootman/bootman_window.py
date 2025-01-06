@@ -1,9 +1,10 @@
 import gi
-import subprocess
-from pathlib import Path
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, GLib, Pango
+from pathlib import Path
+
+import bootman.bootman_actions as actions
 
 class BootmanWindow(Adw.ApplicationWindow):
     def __init__(self, *args, **kwargs):
@@ -16,6 +17,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.install_bottom_sheet = Adw.BottomSheet()
         self.install_bottom_sheet.set_modal(True)
 
+        # Header setup
         self.header = Adw.HeaderBar()
         self.header.set_title_widget(Adw.WindowTitle(title="Boot Manager"))
         add_button = Gtk.Button()
@@ -23,6 +25,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         add_button.connect("clicked", self.show_new_install_dialog)
         self.header.pack_end(add_button)
 
+        # Content setup
         content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         content_box.set_margin_top(12)
         content_box.set_margin_bottom(12)
@@ -42,6 +45,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.partition_list.add_css_class("boxed-list")
         content_box.append(self.partition_list)
 
+        # Navigation and layout setup
         self.main_page = Adw.NavigationPage(title="Main Page")
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.main_box.append(self.header)
@@ -58,9 +62,11 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         self.present()
 
+        # Delayed check for mount and partitions
         GLib.timeout_add(100, self.delayed_check_mount_and_partitions)
 
     def show_toast(self, message, duration=3):
+        """Display a toast message."""
         toast = Adw.Toast(title=message)
         self.toast_overlay.add_toast(toast)
         print(message)
@@ -69,43 +75,26 @@ class BootmanWindow(Adw.ApplicationWindow):
             return False
         GLib.timeout_add_seconds(duration, dismiss_toast)
 
-    def get_partition_size(self, partition_name, password=None):
-        try:
-            cmd = f'echo {password} | sudo -S lvdisplay /dev/droidian/{partition_name}'
-            result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if "LV Size" in line:
-                        size = line.split()[2]
-                        unit = line.split()[3]
-                        return f"{size}{unit}"
-            return "Unknown"
-        except Exception:
-            return "Unknown"
-
     def delayed_check_mount_and_partitions(self):
+        """Delayed initial check of mount and partitions."""
         self.check_mount_and_partitions()
         return False
 
     def check_mount_and_partitions(self):
-        if not self.is_mounted("/furios_persist"):
+        """Check if the partition is mounted and process partitions."""
+        if not actions.is_mounted("/furios_persist"):
             self.show_password_dialog(False)
         else:
-            partitions_file = Path("/furios_persist/partitions")
-            if not partitions_file.exists():
-                self.show_password_dialog(True)
-            else:
-                self.show_password_dialog(True)
+            self.show_password_dialog(True)
         return False
 
-    def is_mounted(self, mount_point):
-        try:
-            with open('/proc/mounts', 'r') as f:
-                return any(mount_point in line for line in f)
-        except Exception:
-            return False
-
     def show_password_dialog(self, only_write):
+        """
+        Show password dialog for mounting or writing partitions.
+
+        Args:
+            only_write (bool): If True, only write partitions. If False, mount first.
+        """
         dialog = Adw.MessageDialog(
             transient_for=self,
             modal=True,
@@ -130,36 +119,104 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.present()
 
     def on_password_response(self, dialog, response, password_entry, only_write):
+        """
+        Handle password dialog response.
+
+        Args:
+            dialog: The dialog widget
+            response: User's response
+            password_entry: Password entry widget
+            only_write: Whether to only write partitions
+        """
         if response == "ok":
             password = password_entry.get_text()
             if only_write:
                 self.process_partitions(password)
             else:
-                self.mount_partition(password)
+                success, message = actions.mount_partition(password)
+                self.show_toast(message)
+                if success:
+                    self.process_partitions(password)
         else:
             exit(0)
         dialog.destroy()
 
-    def mount_partition(self, password):
+    def process_partitions(self, password=None):
+        """
+        Process and display partitions.
+
+        Args:
+            password (str, optional): Sudo password
+        """
+        partitions_file = Path("/furios_persist/partitions")
+
+        if not partitions_file.exists():
+            try:
+                partitions = actions.list_partitions()
+
+                if password:
+                    success, message = actions.write_partitions_file(partitions, password)
+                    if not success:
+                        self.show_toast(message)
+                        return
+
+                # Delay displaying partitions to ensure file is written
+                GLib.timeout_add(100, lambda: self.display_partitions(partitions_file, password))
+            except Exception as e:
+                self.show_toast(f"Error processing partitions: {str(e)}")
+        else:
+            self.display_partitions(partitions_file, password)
+
+    def display_partitions(self, partitions_file, password=None):
+        """
+        Display partitions in the UI list.
+
+        Args:
+            partitions_file (Path): Path to the partitions file
+            password (str, optional): Sudo password for getting partition sizes
+        """
+
+        # Clear existing list
+        while True:
+            row = self.partition_list.get_first_child()
+            if row is None:
+                break
+            self.partition_list.remove(row)
+
         try:
-            mkdir_cmd = f'echo {password} | sudo -S mkdir -p /furios_persist'
-            result = subprocess.run(mkdir_cmd, shell=True, text=True, capture_output=True)
-            if result.returncode != 0:
-                self.show_toast(f"Failed to create mount point: {result.stderr}")
-                return
+            partitions = actions.read_partitions_file(partitions_file)
 
-            mount_cmd = f'echo {password} | sudo -S mount /dev/disk/by-partlabel/furios_persist /furios_persist'
-            result = subprocess.run(mount_cmd, shell=True, text=True, capture_output=True)
+            for partition, name in partitions:
+                row = Adw.ActionRow(title=name)
 
-            if result.returncode == 0:
-                self.show_toast("Successfully mounted partition")
-                self.process_partitions(password)
-            else:
-                self.show_toast(f"Failed to mount partition: {result.stderr}")
+                if password:
+                    size = actions.get_partition_size(partition, password)
+                    if size != "Unknown":
+                        row.set_subtitle(f"Size: {size}")
+
+                # Main rootfs should not be removed
+                if partition != 'droidian-rootfs':
+                    delete_button = Gtk.Button()
+                    delete_button.set_icon_name("user-trash-symbolic")
+                    delete_button.add_css_class("destructive-action")
+                    delete_button.set_valign(Gtk.Align.CENTER)
+                    delete_button.set_margin_top(6)
+                    delete_button.set_margin_bottom(6)
+                    delete_button.set_margin_start(6)
+                    delete_button.set_margin_end(6)
+                    ctx = delete_button.get_style_context()
+                    ctx.add_class("wide-button")
+                    delete_button.set_size_request(42, 40)
+                    delete_button.connect("clicked", lambda btn, p=partition: self.show_delete_dialog(p))
+                    row.add_suffix(delete_button)
+
+                self.partition_list.append(row)
+
         except Exception as e:
-            self.show_toast(f"Error mounting partition: {str(e)}")
+            self.show_toast(f"Error reading partitions: {str(e)}")
 
     def show_new_install_dialog(self, button):
+        """Show dialog for creating a new partition install."""
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         content.set_margin_top(48)
         content.set_margin_bottom(24)
@@ -202,12 +259,52 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.install_bottom_sheet.set_open(True)
 
     def on_size_insert(self, entry, text, length, position):
+        """
+        Validate size entry to only accept digits.
+
+        Args:
+            entry: The entry widget
+            text: Text being inserted
+            length: Length of text being inserted
+            position: Position of insertion
+
+        Returns:
+            bool: Whether to allow the insertion
+        """
         if not text.isdigit():
             entry.stop_emission_by_name("insert-text")
             return True
         return False
 
+    def on_new_install_apply(self, name, size):
+        """
+        Handle new install application.
+
+        Args:
+            name (str): Name of the new installation
+            size (str): Size of the new installation
+        """
+        if not name or not size:
+            self.show_toast("Name and size are required")
+            return
+        try:
+            size_num = int(size)
+            if size_num <= 0:
+                self.show_toast("Size must be greater than 0")
+                return
+            self.install_bottom_sheet.set_open(False)
+            self.show_password_dialog_for_commands(name, size)
+        except ValueError:
+            self.show_toast("Invalid size value")
+
     def show_password_dialog_for_commands(self, name, size):
+        """
+        Show password dialog for creating new partition commands.
+
+        Args:
+            name (str): Name of the new installation
+            size (str): Size of the new installation
+        """
         dialog = Adw.MessageDialog(
             transient_for=self,
             modal=True,
@@ -232,82 +329,29 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.present()
 
     def on_command_password_response(self, dialog, response, password_entry, name, size):
+        """
+        Handle password dialog response for commands.
+
+        Args:
+            dialog: The dialog widget
+            response: User's response
+            password_entry: Password entry widget
+            name: Name of the new installation
+            size: Size of the new installation
+        """
         if response == "ok":
             password = password_entry.get_text()
-            self.create_commands(password, name, size)
+            success, message = actions.create_install_commands(password, name, size)
+            self.show_toast(message)
         dialog.destroy()
 
-    def create_commands(self, password, name, size):
-        try:
-            partition_name = name.replace(" ", "-").lower()
-
-            cmd = f'echo {password} | sudo -S lvdisplay /dev/droidian/droidian-rootfs'
-            result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-            if result.returncode == 0:
-                current_size = None
-                for line in result.stdout.splitlines():
-                    if "LV Size" in line:
-                        current_size = float(line.split()[2])
-                        break
-                if current_size is not None:
-                    new_size = current_size - float(size)
-
-                    commands = [
-                        "e2fsck -f /dev/droidian/droidian-rootfs",
-                        f"resize2fs /dev/droidian/droidian-rootfs {new_size:.2f}G",
-                        f"lvm lvreduce -L -{size}G -r /dev/droidian/droidian-rootfs",
-                        f"lvm lvcreate -L {size}G -n {partition_name} droidian"
-                    ]
-
-                    content = "\\n".join(commands) + "\\n"
-                    content = content.replace('\\n', '\n')
-                    cmd = ['sudo', '-S', 'tee', '/furios_persist/commands']
-                    try:
-                        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-                        process.communicate(input=content, timeout=2)
-                        if process.returncode != 0:
-                            self.show_toast("Failed to create commands file")
-                            return
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        self.show_toast("Timeout while creating commands file")
-                        return
-
-                    wip_content = f"{partition_name}:{name}\\n"
-                    wip_content = wip_content.replace('\\n', '\n')
-                    cmd = ['sudo', '-S', 'tee', '-a', '/furios_persist/wip-partitions']
-                    try:
-                        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-                        process.communicate(input=wip_content, timeout=2)
-                        if process.returncode == 0:
-                            self.show_toast("Commands and partition info created successfully")
-                        else:
-                            self.show_toast("Failed to update wip-partitions file")
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        self.show_toast("Timeout while updating wip-partitions file")
-                else:
-                    self.show_toast("Could not determine current partition size")
-            else:
-                self.show_toast("Failed to get current partition size")
-        except Exception as e:
-            self.show_toast(f"Error creating commands: {str(e)}")
-
-    def on_new_install_apply(self, name, size):
-        if not name or not size:
-            self.show_toast("Name and size are required")
-            return
-        try:
-            size_num = int(size)
-            if size_num <= 0:
-                self.show_toast("Size must be greater than 0")
-                return
-            self.install_bottom_sheet.set_open(False)
-            self.show_password_dialog_for_commands(name, size)
-        except ValueError:
-            self.show_toast("Invalid size value")
-
     def show_delete_dialog(self, partition_name):
+        """
+        Show confirmation dialog for deleting a partition.
+
+        Args:
+            partition_name (str): Name of the partition to delete
+        """
         dialog = Adw.MessageDialog(
             transient_for=self,
             heading="Confirm Deletion",
@@ -323,115 +367,15 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.present()
 
     def on_delete_response(self, dialog, response, partition_name):
+        """
+        Handle partition deletion response.
+
+        Args:
+            dialog: The dialog widget
+            response: User's response
+            partition_name: Name of the partition to delete
+        """
         if response == "delete":
+            # TODO: Implement actual deletion logic
             print(f"Delete requested for: {partition_name}")
         dialog.close()
-
-    def process_partitions(self, password=None):
-        partitions_file = Path("/furios_persist/partitions")
-
-        if not partitions_file.exists():
-            try:
-                droidian_path = Path("/dev/droidian")
-                if not droidian_path.exists():
-                    self.show_toast("Error: /dev/droidian not found")
-                    return
-
-                partitions = [p.name for p in droidian_path.iterdir()
-                              if p.name not in ['droidian-persistent', 'droidian-reserved']]
-
-                content = ''
-                for partition in partitions:
-                    display_name = self.process_partition_name(partition)
-                    content += f"{partition}:{display_name}\\n"
-
-                if password:
-                    content = content.replace('\\n', '\n')
-                    cmd = ['sudo', '-S', 'tee', '/furios_persist/partitions']
-                    try:
-                        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-                        process.communicate(input=content, timeout=2)
-                        if process.returncode != 0:
-                            raise Exception("Failed to write partitions file")
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        raise Exception("Timeout while writing partitions file")
-
-                    subprocess.run(['sync'], check=True)
-
-                GLib.timeout_add(100, lambda: self.display_partitions(partitions_file, password))
-            except Exception as e:
-                self.show_toast(f"Error processing partitions: {str(e)}")
-        else:
-            if password:
-                droidian_path = Path("/dev/droidian")
-                if droidian_path.exists():
-                    partitions = [p.name for p in droidian_path.iterdir()
-                                  if p.name not in ['droidian-persistent', 'droidian-reserved']]
-                    content = ''
-                    for partition in partitions:
-                        display_name = self.process_partition_name(partition)
-                        content += f"{partition}:{display_name}\\n"
-
-                    content = content.replace('\\n', '\n')
-                    cmd = ['sudo', '-S', 'tee', '/furios_persist/partitions']
-                    process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-                    process.communicate(input=content, timeout=2)
-                    subprocess.run(['sync'], check=True)
-            self.display_partitions(partitions_file, password)
-
-    def process_partition_name(self, partition_name):
-        if partition_name == 'droidian-rootfs':
-            return 'FuriOS rootfs'
-
-        if partition_name.startswith('droidian-'):
-            name = partition_name.replace('droidian-', '')
-            words = name.split('-')
-            return 'FuriOS ' + ' '.join(words)
-
-        if partition_name.startswith('furios-'):
-            name = partition_name.replace('furios-', '')
-            words = name.split('-')
-            return 'FuriOS ' + ' '.join(words)
-
-        words = partition_name.split('-')
-        return ' '.join(word.capitalize() for word in words)
-
-    def display_partitions(self, partitions_file, password=None):
-        while True:
-            row = self.partition_list.get_first_child()
-            if row is None:
-                break
-            self.partition_list.remove(row)
-
-        try:
-            with open(partitions_file, 'r') as f:
-                content = f.read().strip()
-                for line in content.split('\n'):
-                    if ':' in line:
-                        partition, name = line.strip().split(':')
-                        row = Adw.ActionRow(title=name)
-
-                        if password:
-                            size = self.get_partition_size(partition, password)
-                            if size != "Unknown":
-                                row.set_subtitle(f"Size: {size}")
-
-                        if partition != 'droidian-rootfs':
-                            delete_button = Gtk.Button()
-                            delete_button.set_icon_name("user-trash-symbolic")
-                            delete_button.add_css_class("destructive-action")
-                            delete_button.set_valign(Gtk.Align.CENTER)
-                            delete_button.set_margin_top(6)
-                            delete_button.set_margin_bottom(6)
-                            delete_button.set_margin_start(6)
-                            delete_button.set_margin_end(6)
-                            ctx = delete_button.get_style_context()
-                            ctx.add_class("wide-button")
-                            delete_button.set_size_request(42, 40)
-                            delete_button.connect("clicked", lambda btn, p=partition: self.show_delete_dialog(p))
-                            row.add_suffix(delete_button)
-
-                        self.partition_list.append(row)
-        except Exception as e:
-            self.show_toast(f"Error reading partitions: {str(e)}")
