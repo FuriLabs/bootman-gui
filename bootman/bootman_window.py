@@ -225,6 +225,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         name_label = Gtk.Label(label="Install Name")
+        name_label.set_width_chars(15)
         name_entry = Gtk.Entry()
         name_entry.set_hexpand(True)
         name_box.append(name_label)
@@ -233,6 +234,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         size_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         size_label = Gtk.Label(label="Install Size (GB)")
+        size_label.set_width_chars(15)
         size_entry = Gtk.Entry()
         size_entry.set_input_purpose(Gtk.InputPurpose.DIGITS)
         size_entry.set_hexpand(True)
@@ -242,14 +244,18 @@ class BootmanWindow(Adw.ApplicationWindow):
         content.append(size_box)
 
         button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        button_box.set_homogeneous(True)
         button_box.set_margin_top(12)
-        button_box.set_halign(Gtk.Align.END)
 
         cancel_button = Gtk.Button(label="Cancel")
+        cancel_button.set_hexpand(True)
+        cancel_button.set_halign(Gtk.Align.FILL)
         cancel_button.connect("clicked", lambda _: self.install_bottom_sheet.set_open(False))
         button_box.append(cancel_button)
 
         apply_button = Gtk.Button(label="Apply")
+        apply_button.set_hexpand(True)
+        apply_button.set_halign(Gtk.Align.FILL)
         apply_button.add_css_class("suggested-action")
         apply_button.connect("clicked", lambda _: self.on_new_install_apply(name_entry.get_text(), size_entry.get_text()))
         button_box.append(apply_button)
