@@ -31,10 +31,17 @@ def mount_partition(password):
         mount_cmd = f'echo {password} | sudo -S mount /dev/disk/by-partlabel/furios_persist /furios_persist'
         result = subprocess.run(mount_cmd, shell=True, text=True, capture_output=True)
 
-        if result.returncode == 0:
-            return True, "Successfully mounted partition"
-        else:
+        if result.returncode != 0:
             return False, f"Failed to mount partition: {result.stderr}"
+
+        # Create bootman work directory
+        bootman_mkdir_cmd = f'echo {password} | sudo -S mkdir -p /furios_persist/bootman'
+        result = subprocess.run(bootman_mkdir_cmd, shell=True, text=True, capture_output=True)
+
+        if result.returncode == 0:
+            return True, "Successfully setup the partition"
+        else:
+            return False, f"Failed to setup the partition: {result.stderr}"
     except Exception as e:
         return False, f"Error mounting partition: {str(e)}"
 
@@ -119,7 +126,7 @@ def write_partitions_file(partitions, password):
             display_name = process_partition_name(partition)
             content += f"{partition}:{display_name}\n"
 
-        cmd = ['sudo', '-S', 'tee', '/furios_persist/partitions']
+        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/partitions']
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
         process.communicate(input=content, timeout=2)
 
@@ -178,7 +185,7 @@ def create_install_commands(password, name, size):
 
         # Write commands to file
         content = "\n".join(commands) + "\n"
-        cmd = ['sudo', '-S', 'tee', '/furios_persist/commands']
+        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/commands']
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
         process.communicate(input=content, timeout=2)
 
@@ -187,7 +194,7 @@ def create_install_commands(password, name, size):
 
         # Update wip-partitions file
         wip_content = f"{partition_name}:{name}\n"
-        cmd = ['sudo', '-S', 'tee', '-a', '/furios_persist/wip-partitions']
+        cmd = ['sudo', '-S', 'tee', '-a', '/furios_persist/bootman/wip-partitions']
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
         process.communicate(input=wip_content, timeout=2)
 

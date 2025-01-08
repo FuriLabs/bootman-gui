@@ -148,7 +148,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         Args:
             password (str, optional): Sudo password
         """
-        partitions_file = Path("/furios_persist/partitions")
+        partitions_file = Path("/furios_persist/bootman/partitions")
 
         if not partitions_file.exists():
             try:
