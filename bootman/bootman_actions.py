@@ -221,7 +221,7 @@ def create_install_commands(password, name, size):
 
         # Update wip-partitions file
         wip_content = f"{partition_name}:{name}\n"
-        cmd = ['sudo', '-S', 'tee', '-a', '/furios_persist/bootman/wip-partitions']
+        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/wip-partitions']
         process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
         process.communicate(input=wip_content, timeout=2)
 
