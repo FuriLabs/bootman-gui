@@ -4,8 +4,11 @@
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, GLib, Pango
+from gi.repository import Gtk, Adw, GLib, Pango, Gio
 from pathlib import Path
+import urllib.request
+import threading
+import os
 
 import bootman.bootman_actions as actions
 
@@ -182,33 +185,52 @@ class BootmanWindow(Adw.ApplicationWindow):
         try:
             partitions = actions.read_partitions_file(partitions_file)
 
-            for partition, name in partitions:
-                row = Adw.ActionRow(title=name)
+            for partition_name, display_name in partitions:
+                row = Adw.ActionRow(title=display_name)
 
-                size = actions.get_partition_size(partition)
+                size = actions.get_partition_size(partition_name)
                 if size != "Unknown":
                     row.set_subtitle(f"Size: {size}")
 
-                can_remove = (partition != 'droidian-rootfs' and
-                            not actions.is_partition_mounted(partition))
+                can_remove = (partition_name != 'droidian-rootfs' and
+                              not actions.is_partition_mounted(partition_name))
 
                 if can_remove:
+                    # Create button box for install and delete buttons
+                    button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                    button_box.set_margin_top(6)
+                    button_box.set_margin_bottom(6)
+                    button_box.set_margin_start(6)
+                    button_box.set_margin_end(6)
+
+                    # Install button with popover
+                    install_button = Gtk.MenuButton()
+                    install_button.set_icon_name("document-save-symbolic")
+                    install_button.add_css_class("suggested-action")
+                    install_button.set_valign(Gtk.Align.CENTER)
+                    ctx = install_button.get_style_context()
+                    ctx.add_class("wide-button")
+                    install_button.set_size_request(42, 40)
+
+                    # Create and set popover
+                    popover = self.create_os_popover(partition_name)
+                    install_button.set_popover(popover)
+
+                    # Delete button
                     delete_button = Gtk.Button()
                     delete_button.set_icon_name("user-trash-symbolic")
                     delete_button.add_css_class("destructive-action")
                     delete_button.set_valign(Gtk.Align.CENTER)
-                    delete_button.set_margin_top(6)
-                    delete_button.set_margin_bottom(6)
-                    delete_button.set_margin_start(6)
-                    delete_button.set_margin_end(6)
                     ctx = delete_button.get_style_context()
                     ctx.add_class("wide-button")
                     delete_button.set_size_request(42, 40)
-                    delete_button.connect("clicked", lambda btn, p=partition: self.show_delete_dialog(p))
-                    row.add_suffix(delete_button)
+                    delete_button.connect("clicked", lambda btn, p=partition_name: self.show_delete_dialog(p))
+
+                    button_box.append(install_button)
+                    button_box.append(delete_button)
+                    row.add_suffix(button_box)
 
                 self.partition_list.append(row)
-
         except Exception as e:
             self.show_toast(f"Error reading partitions: {str(e)}")
 
@@ -427,3 +449,236 @@ class BootmanWindow(Adw.ApplicationWindow):
         """Refresh all UI elements."""
         self.process_partitions()
         self.display_queued_partition()
+
+    def create_os_popover(self, partition_name):
+        """
+        Create a popover with supported OS options.
+
+        Args:
+            partition_name (str): Name of the target partition
+
+        Returns:
+            Gtk.Popover: Configured popover widget
+        """
+        popover = Gtk.Popover()
+        popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        popover_box.add_css_class("menu")
+
+        title = Adw.PreferencesGroup()
+        title.set_title("Select Operating System")
+
+        # Add a row for each supported OS
+        for os_name, description, icon_name in actions.get_supported_operating_systems():
+            os_row = Adw.ActionRow()
+            os_row.set_title(os_name)
+            os_row.set_subtitle(description)
+
+            # Add OS icon
+            icon = Gtk.Image()
+            icon.set_from_icon_name(icon_name)
+            os_row.add_prefix(icon)
+
+            # Add arrow
+            arrow = Gtk.Image()
+            arrow.set_from_icon_name("go-next-symbolic")
+            os_row.add_suffix(arrow)
+
+            # Make the row clickable
+            row_click = Gtk.GestureClick.new()
+            row_click.connect("released",
+                              lambda gesture, n_press, x, y, part=partition_name, os=os_name:
+                              self.on_install_os(part, os))
+            os_row.add_controller(row_click)
+
+            title.add(os_row)
+
+        popover_box.append(title)
+        popover.set_child(popover_box)
+        return popover
+
+    def on_install_os(self, partition_name, os_name):
+        """
+        Handle OS installation selection.
+
+        Args:
+            partition_name (str): Name of the partition to install to
+            os_name (str): Name of the OS to install
+        """
+        url = actions.get_os_download_url(os_name)
+        if not url:
+            self.show_toast(f"Download URL not found for {os_name}")
+            return
+
+        dialog = self.create_download_dialog(partition_name, os_name, url)
+        dialog.present()
+
+    def create_download_dialog(self, partition_name, os_name, url):
+        """
+        Create a dialog with a progress bar for downloading.
+
+        Args:
+            partition_name (str): Target partition name
+            os_name (str): Name of OS being installed
+            url (str): Download URL
+
+        Returns:
+            Adw.MessageDialog: Dialog with progress bar
+        """
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            modal=True,
+            heading=f"Downloading {os_name}",
+            body=f"Downloading {os_name} for installation..."
+        )
+
+        # Store download state
+        download_state = {
+            'completed': False,
+            'cancelled': False
+        }
+        dialog.download_state = download_state
+
+        # Create content box for progress
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        content.set_margin_top(12)
+        content.set_margin_bottom(12)
+
+        # Add status label
+        status_label = Gtk.Label()
+        status_label.set_text("Starting download...")
+        status_label.set_halign(Gtk.Align.START)
+        content.append(status_label)
+
+        # Add progress bar
+        progress_bar = Gtk.ProgressBar()
+        progress_bar.set_show_text(True)
+        progress_bar.set_text("0%")
+        progress_bar.set_valign(Gtk.Align.CENTER)
+        content.append(progress_bar)
+
+        dialog.set_extra_child(content)
+
+        # Add cancel button
+        dialog.add_response("cancel", "Cancel")
+        dialog.set_response_appearance("cancel", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        # Start download in a separate thread
+        cancel_event = threading.Event()
+        download_thread = threading.Thread(
+            target=self.download_os_image,
+            args=(url, progress_bar, status_label, dialog, cancel_event,
+                  partition_name, os_name, download_state)
+        )
+
+        # Connect cancel button
+        dialog.connect("response", lambda dlg, resp: self.on_download_response(dlg, resp, cancel_event, download_state))
+
+        download_thread.daemon = True
+        download_thread.start()
+
+        return dialog
+
+    def on_download_response(self, dialog, response, cancel_event, download_state):
+        """
+        Handle dialog response (typically cancel button).
+        """
+        if not download_state['completed'] and not download_state['cancelled']:
+            download_state['cancelled'] = True
+            cancel_event.set()
+            self.show_toast("Download cancelled")
+        dialog.close()
+
+    def download_os_image(self, url, progress_bar, status_label, dialog,
+                          cancel_event, partition_name, os_name, download_state):
+        """Download OS image with progress updates."""
+        try:
+            response = urllib.request.urlopen(url)
+            total_size = int(response.headers.get('content-length', 0))
+            block_size = 8192
+            downloaded = 0
+
+            save_path = f"/tmp/{os_name.lower()}-{partition_name}.img"
+            with open(save_path, 'wb') as f:
+                while True:
+                    if cancel_event.is_set():
+                        # Clean up partial download
+                        os.unlink(save_path)
+                        return
+
+                    buffer = response.read(block_size)
+                    if not buffer:
+                        break
+
+                    downloaded += len(buffer)
+                    f.write(buffer)
+
+                    # Update progress
+                    progress = downloaded / total_size
+                    GLib.idle_add(self.update_progress,
+                                  progress_bar,
+                                  status_label,
+                                  progress,
+                                  downloaded,
+                                  total_size)
+
+            # Download complete
+            download_state['completed'] = True
+            GLib.idle_add(self.download_complete,
+                          dialog,
+                          save_path,
+                          partition_name,
+                          os_name)
+
+        except Exception as e:
+            if not cancel_event.is_set():
+                GLib.idle_add(self.download_error, dialog, str(e))
+
+    def download_complete(self, dialog, save_path, partition_name, os_name):
+        """Handle download completion."""
+        dialog.close()
+        self.show_toast(f"Download complete: {os_name}")
+        print(f"Downloaded image saved to: {save_path}")
+        return False
+
+    def download_error(self, dialog, error_message):
+        """Handle download error."""
+        dialog.close()
+        self.show_error_dialog(f"Download failed: {error_message}")
+        return False
+
+    def cancel_download(self, cancel_event, dialog):
+        """
+        Handle download cancellation.
+
+        Args:
+            cancel_event (threading.Event): Event to signal cancellation
+            dialog (Adw.MessageDialog): Dialog to close
+        """
+        cancel_event.set()
+        dialog.close()
+        self.show_toast("Download cancelled")
+
+    def update_progress(self, progress_bar, status_label, progress, downloaded, total):
+        """Update progress bar and status label."""
+        progress_bar.set_fraction(progress)
+        progress_bar.set_text(f"{int(progress * 100)}%")
+
+        # Format sizes
+        downloaded_mb = downloaded / (1024 * 1024)
+        total_mb = total / (1024 * 1024)
+        status_label.set_text(f"Downloaded: {downloaded_mb:.1f} MB / {total_mb:.1f} MB")
+        return False
+
+    def download_complete(self, dialog, save_path, partition_name, os_name):
+        """Handle download completion."""
+        dialog.close()
+        self.show_toast(f"Download complete: {os_name}")
+        print(f"Downloaded image saved to: {save_path}")
+        # TODO: implement installation
+        return False
+
+    def download_error(self, dialog, error_message):
+        """Handle download error."""
+        dialog.close()
+        self.show_error_dialog(f"Download failed: {error_message}")
+        return False

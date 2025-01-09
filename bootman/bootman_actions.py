@@ -203,3 +203,33 @@ def get_queued_partition():
         return None
     except Exception:
         return None
+
+def get_supported_operating_systems():
+    """
+    Get list of supported operating systems.
+
+    Returns:
+        list: List of tuples containing (name, description, icon_name)
+    """
+    return [
+        (
+            "FuriOS",
+            "FuriOS is a Linux OS for mobile devices from FuriLabs",
+            "computer-symbolic"
+        )
+    ]
+
+def get_os_download_url(os_name):
+    """
+    Get the download URL for a specific operating system.
+
+    Args:
+        os_name (str): Name of the operating system
+
+    Returns:
+        str: URL to download the OS image, or None if not found
+    """
+    url_map = {
+        "FuriOS": "https://filedump.furios.io/krypton/vendor-1.img"
+    }
+    return url_map.get(os_name)
