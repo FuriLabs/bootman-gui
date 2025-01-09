@@ -111,7 +111,7 @@ def list_partitions():
 
 def write_partitions_file(partitions, password):
     """
-    Write partitions to /furios_persist/partitions file.
+    Write partitions to /furios_persist/bootman/partitions file.
 
     Args:
         partitions (list): List of partition names
@@ -232,3 +232,68 @@ def read_partitions_file(partitions_file):
     except Exception as e:
         print(f"Error reading partitions: {str(e)}")
         return []
+
+def delete_install_commands(password, partition_name):
+    """
+    Create commands for deleting a partition and adding its space back to rootfs.
+
+    Args:
+        password (str): sudo password
+        partition_name (str): Name of the partition to delete
+
+    Returns:
+        tuple: (success_boolean, message)
+    """
+    try:
+        # Get size of partition to be deleted
+        cmd = f'echo {password} | sudo -S lvdisplay /dev/droidian/{partition_name}'
+        result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+        if result.returncode != 0:
+            return False, "Failed to get partition size"
+
+        size = None
+        for line in result.stdout.splitlines():
+            if "LV Size" in line:
+                size = float(line.split()[2])
+                unit = line.split()[3]
+                # Convert to MB if in GB
+                if unit.lower() == 'gib':
+                    size = size * 1024
+                break
+        if size is None:
+            return False, "Could not determine partition size"
+
+        # Create commands to remove partition and extend rootfs
+        commands = [
+            f"lvm lvremove -f /dev/droidian/{partition_name}",
+            f"lvm lvextend -L +{int(size)}M /dev/droidian/droidian-rootfs",
+            "resize2fs /dev/droidian/droidian-rootfs"
+        ]
+
+        # Write commands to file
+        content = "\n".join(commands) + "\n"
+        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/commands']
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
+        process.communicate(input=content, timeout=2)
+
+        if process.returncode != 0:
+            return False, "Failed to create commands file"
+
+        # Remove entry from partitions file
+        partitions = []
+        with open('/furios_persist/bootman/partitions', 'r') as f:
+            partitions = [line.strip() for line in f if partition_name not in line]
+
+        content = "\n".join(partitions) + "\n"
+        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/partitions']
+        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
+        process.communicate(input=content, timeout=2)
+
+        if process.returncode != 0:
+            return False, "Failed to update partitions file"
+
+        return True, "Delete commands created successfully"
+    except subprocess.TimeoutExpired:
+        return False, "Timeout while creating delete commands"
+    except Exception as e:
+        return False, f"Error creating delete commands: {str(e)}"

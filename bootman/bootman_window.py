@@ -382,6 +382,53 @@ class BootmanWindow(Adw.ApplicationWindow):
             partition_name: Name of the partition to delete
         """
         if response == "delete":
-            # TODO: Implement actual deletion logic
-            print(f"Delete requested for: {partition_name}")
+            self.show_password_dialog_for_delete(partition_name)
         dialog.close()
+
+    def show_password_dialog_for_delete(self, partition_name):
+        """
+        Show password dialog for deletion commands.
+
+        Args:
+            partition_name (str): Name of the partition to delete
+        """
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            modal=True,
+            heading="Password Required",
+            body="Please enter your password to continue"
+        )
+
+        password_entry = Gtk.PasswordEntry()
+        password_entry.set_show_peek_icon(True)
+        password_entry.set_margin_top(12)
+        password_entry.set_margin_bottom(12)
+        password_entry.set_margin_start(12)
+        password_entry.set_margin_end(12)
+
+        dialog.set_extra_child(password_entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("ok", "OK")
+        dialog.set_default_response("ok")
+        dialog.set_close_response("cancel")
+
+        dialog.connect("response", self.on_delete_password_response, password_entry, partition_name)
+        dialog.present()
+
+    def on_delete_password_response(self, dialog, response, password_entry, partition_name):
+        """
+        Handle password dialog response for deletion.
+
+        Args:
+            dialog: The dialog widget
+            response: User's response
+            password_entry: Password entry widget
+            partition_name: Name of the partition to delete
+        """
+        if response == "ok":
+            password = password_entry.get_text()
+            success, message = actions.delete_install_commands(password, partition_name)
+            self.show_toast(message)
+            if success:
+                self.process_partitions(password)
+        dialog.destroy()
