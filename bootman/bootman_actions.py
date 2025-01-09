@@ -87,7 +87,9 @@ def create_install_commands(name, size):
         "e2fsck -p -y -f /dev/droidian/droidian-rootfs",
         f"resize2fs /dev/droidian/droidian-rootfs {new_size_mb}M",
         f"lvm lvreduce -L -{size_mb}M -r /dev/droidian/droidian-rootfs",
-        f"lvm lvcreate -L {size_mb}M -n {partition_name} droidian"
+        f"lvm lvcreate -L {size_mb}M -n {partition_name} droidian",
+        f"mke2fs -t ext4 /dev/droidian/{partition_name}",
+        f"e2fsck -p -y -f /dev/droidian/{partition_name}"
     ]
     success, _ = run_helper("write_commands", "\n".join(commands))
     if not success:
