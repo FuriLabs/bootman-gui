@@ -32,6 +32,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         content_box.set_margin_start(12)
         content_box.set_margin_end(12)
 
+        # Installed Systems section
         systems_label = Gtk.Label(label="Installed Systems")
         systems_label.set_halign(Gtk.Align.START)
         systems_label.set_margin_bottom(6)
@@ -44,6 +45,26 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.partition_list.set_selection_mode(Gtk.SelectionMode.NONE)
         self.partition_list.add_css_class("boxed-list")
         content_box.append(self.partition_list)
+
+        # Add spacing between sections
+        separator = Gtk.Box()
+        separator.set_margin_top(12)
+        separator.set_margin_bottom(12)
+        content_box.append(separator)
+
+        # Queued Partitions section
+        queued_label = Gtk.Label(label="Queued Partition")
+        queued_label.set_halign(Gtk.Align.START)
+        queued_label.set_margin_bottom(6)
+        attr_list = Pango.AttrList()
+        attr_list.insert(Pango.attr_weight_new(Pango.Weight.BOLD))
+        queued_label.set_attributes(attr_list)
+        content_box.append(queued_label)
+
+        self.queued_list = Gtk.ListBox()
+        self.queued_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.queued_list.add_css_class("boxed-list")
+        content_box.append(self.queued_list)
 
         # Navigation and layout setup
         self.main_page = Adw.NavigationPage(title="Main Page")
@@ -167,6 +188,33 @@ class BootmanWindow(Adw.ApplicationWindow):
         else:
             self.display_partitions(partitions_file, password)
 
+        # Always display queued partitions
+        self.display_queued_partition()
+
+    def display_queued_partition(self):
+        """Display any queued partition in the queued list."""
+        # Clear existing list
+        while True:
+            row = self.queued_list.get_first_child()
+            if row is None:
+                break
+            self.queued_list.remove(row)
+
+        # Check for queued partition
+        queued = actions.get_queued_partition()
+        if queued:
+            partition_name, display_name = queued
+            row = Adw.ActionRow(title=display_name)
+            row.set_subtitle("Queued for installation")
+
+            status_icon = Gtk.Image()
+            status_icon.set_from_icon_name("alarm-symbolic")
+            status_icon.set_margin_start(6)
+            status_icon.set_margin_end(6)
+            row.add_suffix(status_icon)
+
+            self.queued_list.append(row)
+
     def display_partitions(self, partitions_file, password=None):
         """
         Display partitions in the UI list.
@@ -175,7 +223,6 @@ class BootmanWindow(Adw.ApplicationWindow):
             partitions_file (Path): Path to the partitions file
             password (str, optional): Sudo password for getting partition sizes
         """
-
         # Clear existing list
         while True:
             row = self.partition_list.get_first_child()
@@ -351,6 +398,8 @@ class BootmanWindow(Adw.ApplicationWindow):
             password = password_entry.get_text()
             success, message = actions.create_install_commands(password, name, size)
             self.show_toast(message)
+            if success:
+                self.process_partitions(password)
         dialog.destroy()
 
     def show_delete_dialog(self, partition_name):

@@ -320,3 +320,30 @@ def delete_install_commands(password, partition_name):
         return False, "Timeout while queueing deletion"
     except Exception as e:
         return False, f"Error queuing deletion: {str(e)}"
+
+def get_queued_partition():
+    """
+    Check if there's a queued partition install by checking wip-partitions and commands files.
+
+    Returns:
+        tuple: (partition_name, display_name) if found, None otherwise
+    """
+    try:
+        wip_file = Path("/furios_persist/bootman/wip-partitions")
+        commands_file = Path("/furios_persist/bootman/commands")
+
+        if not (wip_file.exists() and commands_file.exists()):
+            return None
+
+        with open(wip_file, 'r') as f:
+            content = f.read().strip()
+            if not content:
+                return None
+
+            parts = content.split(':')
+            if len(parts) == 2:
+                return (parts[0], parts[1])
+
+        return None
+    except Exception:
+        return None
