@@ -1,0 +1,32 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+# Copyright (C) 2025 Bardia Moshiri <bardia@furilabs.com>
+
+set -e
+
+ACTION="$1"
+shift
+
+case "$ACTION" in
+    "mount")
+        mkdir -p /furios_persist
+        mount /dev/disk/by-partlabel/furios_persist /furios_persist
+        mkdir -p /furios_persist/bootman
+        ;;
+    "write_partitions")
+        echo "$1" > /furios_persist/bootman/partitions
+        ;;
+    "write_commands")
+        echo "$1" > /furios_persist/bootman/commands
+        ;;
+    "write_wip")
+        echo "$1" > /furios_persist/bootman/wip-partitions
+        ;;
+    "lvdisplay")
+        lvdisplay "$1"
+        ;;
+    *)
+        echo "Unknown action: $ACTION"
+        exit 1
+        ;;
+esac

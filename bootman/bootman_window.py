@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-# Copyright (C) 2024 Bardia Moshiri <bardia@furilabs.com>
+# Copyright (C) 2025 Bardia Moshiri <bardia@furilabs.com>
 
 import gi
 gi.require_version('Gtk', '4.0')
@@ -106,90 +106,37 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def check_mount_and_partitions(self):
         """Check if the partition is mounted and process partitions."""
-        if not actions.is_mounted("/furios_persist"):
-            self.show_password_dialog(False)
-        else:
-            self.show_password_dialog(True)
+        try:
+            if not actions.is_mounted("/furios_persist"):
+                success, message = actions.mount_partition()
+                if success:
+                    self.process_partitions()
+                else:
+                    self.show_toast("Failed to mount partition")
+            else:
+                self.process_partitions()
+        except Exception as e:
+            self.show_error_dialog(str(e))
         return False
 
-    def show_password_dialog(self, only_write):
-        """
-        Show password dialog for mounting or writing partitions.
-
-        Args:
-            only_write (bool): If True, only write partitions. If False, mount first.
-        """
-        dialog = Adw.MessageDialog(
-            transient_for=self,
-            modal=True,
-            heading="Password Required",
-            body="Please enter your password to continue"
-        )
-
-        password_entry = Gtk.PasswordEntry()
-        password_entry.set_show_peek_icon(True)
-        password_entry.set_margin_top(12)
-        password_entry.set_margin_bottom(12)
-        password_entry.set_margin_start(12)
-        password_entry.set_margin_end(12)
-
-        dialog.set_extra_child(password_entry)
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("ok", "OK")
-        dialog.set_default_response("ok")
-        dialog.set_close_response("cancel")
-
-        dialog.connect("response", self.on_password_response, password_entry, only_write)
-        dialog.present()
-
-    def on_password_response(self, dialog, response, password_entry, only_write):
-        """
-        Handle password dialog response.
-
-        Args:
-            dialog: The dialog widget
-            response: User's response
-            password_entry: Password entry widget
-            only_write: Whether to only write partitions
-        """
-        if response == "ok":
-            password = password_entry.get_text()
-            if only_write:
-                self.process_partitions(password)
-            else:
-                success, message = actions.mount_partition(password)
-                self.show_toast(message)
-                if success:
-                    self.process_partitions(password)
-        else:
-            exit(0)
-        dialog.destroy()
-
-    def process_partitions(self, password=None):
-        """
-        Process and display partitions.
-
-        Args:
-            password (str, optional): Sudo password
-        """
+    def process_partitions(self):
+        """Process and display partitions."""
         partitions_file = Path("/furios_persist/bootman/partitions")
 
         if not partitions_file.exists():
             try:
                 partitions = actions.list_partitions()
-
-                if password:
-                    success, message = actions.write_partitions_file(partitions, password)
-                    if not success:
-                        self.show_toast(message)
-                        return
+                success, message = actions.write_partitions_file(partitions)
+                if not success:
+                    self.show_toast(message)
+                    return
 
                 # Delay displaying partitions to ensure file is written
-                GLib.timeout_add(100, lambda: self.display_partitions(partitions_file, password))
+                GLib.timeout_add(100, lambda: self.display_partitions(partitions_file))
             except Exception as e:
                 self.show_toast(f"Error processing partitions: {str(e)}")
         else:
-            self.display_partitions(partitions_file, password)
+            self.display_partitions(partitions_file)
 
         # Always display queued partitions
         self.display_queued_partition()
@@ -218,13 +165,12 @@ class BootmanWindow(Adw.ApplicationWindow):
 
             self.queued_list.append(row)
 
-    def display_partitions(self, partitions_file, password=None):
+    def display_partitions(self, partitions_file):
         """
         Display partitions in the UI list.
 
         Args:
             partitions_file (Path): Path to the partitions file
-            password (str, optional): Sudo password for getting partition sizes
         """
         # Clear existing list
         while True:
@@ -239,13 +185,12 @@ class BootmanWindow(Adw.ApplicationWindow):
             for partition, name in partitions:
                 row = Adw.ActionRow(title=name)
 
-                if password:
-                    size = actions.get_partition_size(partition, password)
-                    if size != "Unknown":
-                        row.set_subtitle(f"Size: {size}")
+                size = actions.get_partition_size(partition)
+                if size != "Unknown":
+                    row.set_subtitle(f"Size: {size}")
 
                 can_remove = (partition != 'droidian-rootfs' and
-                              not actions.is_partition_mounted(partition))
+                            not actions.is_partition_mounted(partition))
 
                 if can_remove:
                     delete_button = Gtk.Button()
@@ -355,37 +300,6 @@ class BootmanWindow(Adw.ApplicationWindow):
         except ValueError:
             self.show_toast("Invalid size value")
 
-    def show_password_dialog_for_commands(self, name, size):
-        """
-        Show password dialog for creating new partition commands.
-
-        Args:
-            name (str): Name of the new installation
-            size (str): Size of the new installation
-        """
-        dialog = Adw.MessageDialog(
-            transient_for=self,
-            modal=True,
-            heading="Password Required",
-            body="Please enter your password to continue"
-        )
-
-        password_entry = Gtk.PasswordEntry()
-        password_entry.set_show_peek_icon(True)
-        password_entry.set_margin_top(12)
-        password_entry.set_margin_bottom(12)
-        password_entry.set_margin_start(12)
-        password_entry.set_margin_end(12)
-
-        dialog.set_extra_child(password_entry)
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("ok", "OK")
-        dialog.set_default_response("ok")
-        dialog.set_close_response("cancel")
-
-        dialog.connect("response", self.on_command_password_response, password_entry, name, size)
-        dialog.present()
-
     def show_queue_warning_dialog(self, name, size):
         """
         Show warning dialog when there's already a queued partition.
@@ -411,8 +325,22 @@ class BootmanWindow(Adw.ApplicationWindow):
             dialog.connect("response", self.on_queue_warning_response, name, size)
             dialog.present()
         else:
-            # No queue exists, proceed directly to password dialog
-            self.show_password_dialog_for_commands(name, size)
+            # No queue exists, proceed directly with creation
+            self.create_new_partition(name, size)
+
+    def create_new_partition(self, name, size):
+        """
+        Create a new partition.
+
+        Args:
+            name (str): Name of the new installation
+            size (str): Size of the new installation
+        """
+        success, message = actions.create_install_commands(name, size)
+        self.show_toast(message)
+        if success:
+            self.process_partitions()
+            self.show_reboot_dialog()
 
     def show_reboot_dialog(self):
         """Show dialog informing user they can reboot to apply changes."""
@@ -437,28 +365,8 @@ class BootmanWindow(Adw.ApplicationWindow):
             size: Size of the new installation
         """
         if response == "continue":
-            self.show_password_dialog_for_commands(name, size)
+            self.create_new_partition(name, size)
         dialog.close()
-
-    def on_command_password_response(self, dialog, response, password_entry, name, size):
-        """
-        Handle password dialog response for commands.
-
-        Args:
-            dialog: The dialog widget
-            response: User's response
-            password_entry: Password entry widget
-            name: Name of the new installation
-            size: Size of the new installation
-        """
-        if response == "ok":
-            password = password_entry.get_text()
-            success, message = actions.create_install_commands(password, name, size)
-            self.show_toast(message)
-            if success:
-                self.process_partitions(password)
-                self.show_reboot_dialog()
-        dialog.destroy()
 
     def show_delete_dialog(self, partition_name):
         """
@@ -491,53 +399,31 @@ class BootmanWindow(Adw.ApplicationWindow):
             partition_name: Name of the partition to delete
         """
         if response == "delete":
-            self.show_password_dialog_for_delete(partition_name)
+            success, message = actions.delete_install_commands(partition_name)
+            self.show_toast(message)
+            if success:
+                self.process_partitions()
+                self.show_reboot_dialog()
         dialog.close()
 
-    def show_password_dialog_for_delete(self, partition_name):
+    def show_error_dialog(self, message):
         """
-        Show password dialog for deletion commands.
+        Show an error dialog with a message.
 
         Args:
-            partition_name (str): Name of the partition to delete
+            message (str): Error message to display
         """
         dialog = Adw.MessageDialog(
             transient_for=self,
-            modal=True,
-            heading="Password Required",
-            body="Please enter your password to continue"
+            heading="Error",
+            body=message,
+            modal=True
         )
 
-        password_entry = Gtk.PasswordEntry()
-        password_entry.set_show_peek_icon(True)
-        password_entry.set_margin_top(12)
-        password_entry.set_margin_bottom(12)
-        password_entry.set_margin_start(12)
-        password_entry.set_margin_end(12)
-
-        dialog.set_extra_child(password_entry)
-        dialog.add_response("cancel", "Cancel")
         dialog.add_response("ok", "OK")
-        dialog.set_default_response("ok")
-        dialog.set_close_response("cancel")
-
-        dialog.connect("response", self.on_delete_password_response, password_entry, partition_name)
         dialog.present()
 
-    def on_delete_password_response(self, dialog, response, password_entry, partition_name):
-        """
-        Handle password dialog response for deletion.
-
-        Args:
-            dialog: The dialog widget
-            response: User's response
-            password_entry: Password entry widget
-            partition_name: Name of the partition to delete
-        """
-        if response == "ok":
-            password = password_entry.get_text()
-            success, message = actions.delete_install_commands(password, partition_name)
-            self.show_toast(message)
-            if success:
-                self.process_partitions(password)
-        dialog.destroy()
+    def refresh_ui(self):
+        """Refresh all UI elements."""
+        self.process_partitions()
+        self.display_queued_partition()

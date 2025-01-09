@@ -1,336 +1,190 @@
 # SPDX-License-Identifier: GPL-2.0
-# Copyright (C) 2024 Bardia Moshiri <bardia@furilabs.com>
+# Copyright (C) 2025 Bardia Moshiri <bardia@furilabs.com>
 
 import subprocess
 from pathlib import Path
+import threading
 
-def is_mounted(mount_point):
+_command_lock = threading.Lock()
+HELPER_PATH = "/usr/libexec/bootman-helper"
+
+def run_helper(*args):
     """
-    Check if a specific mount point is currently mounted by reading /proc/mounts.
+    Run the bootman helper script with the given arguments.
 
     Args:
-        mount_point (str): Path of the mount point to check
+        *args: Arguments to pass to the helper script
 
     Returns:
-        bool: True if the mount point is mounted, False otherwise
+        tuple: (success_boolean, message)
     """
+    global _command_lock
+
+    with _command_lock:  # Ensure only one privileged operation runs at a time
+        try:
+            result = subprocess.run(
+                ['pkexec', HELPER_PATH, *map(str, args)],
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                return False, f"Command execution failed: {result.stderr}"
+            return True, result.stdout
+        except Exception as e:
+            return False, f"Error executing command: {str(e)}"
+
+def mount_partition():
+    """Mount the FuriOS persist partition."""
+    return run_helper("mount")
+
+def get_partition_size(partition_name):
+    """Get the size of a specific LVM partition."""
+    success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+
+    if success:
+        for line in output.splitlines():
+            if "LV Size" in line:
+                size = line.split()[2]
+                unit = line.split()[3]
+                return f"{size}{unit}"
+    return "Unknown"
+
+def write_partitions_file(partitions):
+    """Write partitions to /furios_persist/bootman/partitions file."""
+    content = ''
+    for partition in partitions:
+        display_name = process_partition_name(partition)
+        content += f"{partition}:{display_name}\n"
+
+    return run_helper("write_partitions", content)
+
+def create_install_commands(name, size):
+    """Create commands for creating a new partition."""
+    partition_name = name.replace(" ", "-").lower()
+
+    # Get current root filesystem size
+    success, output = run_helper("lvdisplay", "/dev/droidian/droidian-rootfs")
+    if not success:
+        return False, "Failed to get current partition size"
+
+    current_size = None
+    for line in output.splitlines():
+        if "LV Size" in line:
+            current_size = float(line.split()[2])
+            break
+
+    if current_size is None:
+        return False, "Could not determine current partition size"
+
+    # Calculate new sizes
+    new_size = current_size - float(size)
+    new_size_mb = int(new_size * 1024)
+    size_mb = int(float(size) * 1024)
+
+    # Write the command file
+    commands = [
+        "e2fsck -p -y -f /dev/droidian/droidian-rootfs",
+        f"resize2fs /dev/droidian/droidian-rootfs {new_size_mb}M",
+        f"lvm lvreduce -L -{size_mb}M -r /dev/droidian/droidian-rootfs",
+        f"lvm lvcreate -L {size_mb}M -n {partition_name} droidian"
+    ]
+    success, _ = run_helper("write_commands", "\n".join(commands))
+    if not success:
+        return False, "Failed to write commands"
+
+    # Write the wip file
+    success, _ = run_helper("write_wip", f"{partition_name}:{name}")
+    if not success:
+        return False, "Failed to write wip file"
+
+    return True, "Partition creation queued successfully"
+
+def delete_install_commands(partition_name):
+    """Create commands for deleting a partition."""
+    # Get partition size
+    success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+    if not success:
+        return False, "Failed to get partition size"
+
+    size = None
+    for line in output.splitlines():
+        if "LV Size" in line:
+            size = float(line.split()[2])
+            unit = line.split()[3]
+            if unit.lower() == 'gib':
+                size = size * 1024
+            break
+
+    if size is None:
+        return False, "Could not determine partition size"
+
+    # Write the command file
+    commands = [
+        f"lvm lvremove -f /dev/droidian/{partition_name}",
+        f"lvm lvextend -L +{int(size)}M /dev/droidian/droidian-rootfs",
+        "resize2fs /dev/droidian/droidian-rootfs"
+    ]
+    success, _ = run_helper("write_commands", "\n".join(commands))
+    if not success:
+        return False, "Failed to write commands"
+
+    # Update partitions file
+    success, output = run_helper("cat", "/furios_persist/bootman/partitions")
+    if success:
+        partitions = [line.strip() for line in output.splitlines() if partition_name not in line]
+        content = "\n".join(partitions)
+        success, _ = run_helper("write_partitions", content)
+        if not success:
+            return False, "Failed to update partitions file"
+
+    return True, "Deletion queued successfully"
+
+def is_mounted(mount_point):
+    """Check if a mount point is currently mounted."""
     try:
-        with open('/proc/mounts', 'r') as f:
-            return any(mount_point in line for line in f)
+        return Path('/proc/mounts').read_text().find(mount_point) != -1
     except Exception:
         return False
 
 def is_partition_mounted(partition_name):
-    """
-    Check if a specific partition is currently mounted by reading /proc/mounts.
-
-    Args:
-        partition_name (str): Name of the partition to check
-
-    Returns:
-        bool: True if mounted, False otherwise
-    """
+    """Check if a specific partition is currently mounted."""
     try:
-        device_path = f"/dev/droidian/{partition_name}"
-        with open('/proc/mounts', 'r') as f:
-            return any(device_path in line for line in f)
+        return Path('/proc/mounts').read_text().find(f"/dev/droidian/{partition_name}") != -1
     except Exception:
         return False
 
-def mount_partition(password):
-    """
-    Mount the FuriOS persist partition.
-
-    Args:
-        password (str): sudo password
-
-    Returns:
-        tuple: (success_boolean, message)
-    """
-    try:
-        # Create mount point
-        mkdir_cmd = f'echo {password} | sudo -S mkdir -p /furios_persist'
-        result = subprocess.run(mkdir_cmd, shell=True, text=True, capture_output=True)
-        if result.returncode != 0:
-            return False, f"Failed to create mount point: {result.stderr}"
-
-        # Mount partition
-        mount_cmd = f'echo {password} | sudo -S mount /dev/disk/by-partlabel/furios_persist /furios_persist'
-        result = subprocess.run(mount_cmd, shell=True, text=True, capture_output=True)
-
-        if result.returncode != 0:
-            return False, f"Failed to mount partition: {result.stderr}"
-
-        # Create bootman work directory
-        bootman_mkdir_cmd = f'echo {password} | sudo -S mkdir -p /furios_persist/bootman'
-        result = subprocess.run(bootman_mkdir_cmd, shell=True, text=True, capture_output=True)
-
-        if result.returncode == 0:
-            return True, "Successfully setup the partition"
-        else:
-            return False, f"Failed to setup the partition: {result.stderr}"
-    except Exception as e:
-        return False, f"Error mounting partition: {str(e)}"
-
-def get_partition_size(partition_name, password=None):
-    """
-    Get the size of a specific LVM partition.
-
-    Args:
-        partition_name (str): Name of the partition
-        password (str, optional): sudo password
-
-    Returns:
-        str: Partition size or "Unknown"
-    """
-    try:
-        cmd = f'echo {password} | sudo -S lvdisplay /dev/droidian/{partition_name}'
-        result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                if "LV Size" in line:
-                    size = line.split()[2]
-                    unit = line.split()[3]
-                    return f"{size}{unit}"
-        return "Unknown"
-    except Exception:
-        return "Unknown"
-
 def process_partition_name(partition_name):
-    """
-    Convert raw partition name to a more readable format.
-
-    Args:
-        partition_name (str): Raw partition name
-
-    Returns:
-        str: Formatted partition name
-    """
-    if partition_name == 'droidian-rootfs':
-        return 'FuriOS rootfs'
-
-    if partition_name.startswith('droidian-'):
-        name = partition_name.replace('droidian-', '')
-        words = name.split('-')
-        return 'FuriOS ' + ' '.join(words)
-
-    if partition_name.startswith('furios-'):
-        name = partition_name.replace('furios-', '')
-        words = name.split('-')
-        return 'FuriOS ' + ' '.join(words)
-
-    words = partition_name.split('-')
+    """Convert a partition name to a more readable format."""
+    name = partition_name.replace('droidian-', '').replace('furios-', '')
+    words = name.split('-')
     return ' '.join(word.capitalize() for word in words)
 
 def list_partitions():
-    """
-    List partitions in the /dev/droidian directory.
+    """List all available partitions."""
+    try:
+        droidian_path = Path("/dev/droidian")
+        if not droidian_path.exists():
+            return []
 
-    Returns:
-        list: List of partition names
-    """
-    droidian_path = Path("/dev/droidian")
-    if not droidian_path.exists():
+        excluded = ['droidian-persistent', 'droidian-reserved']
+        return [p.name for p in droidian_path.iterdir() 
+                if p.exists() and p.name not in excluded]
+    except Exception:
         return []
-
-    return [p.name for p in droidian_path.iterdir()
-            if p.name not in ['droidian-persistent', 'droidian-reserved']]
-
-def write_partitions_file(partitions, password):
-    """
-    Write partitions to /furios_persist/bootman/partitions file.
-
-    Args:
-        partitions (list): List of partition names
-        password (str): sudo password
-
-    Returns:
-        tuple: (success_boolean, message)
-    """
-    try:
-        content = ''
-        for partition in partitions:
-            display_name = process_partition_name(partition)
-            content += f"{partition}:{display_name}\n"
-
-        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/partitions']
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-        process.communicate(input=content, timeout=2)
-
-        if process.returncode != 0:
-            return False, "Failed to write partitions file"
-
-        subprocess.run(['sync'], check=True)
-        return True, "Partitions file updated successfully"
-    except subprocess.TimeoutExpired:
-        process.kill()
-        return False, "Timeout while writing partitions file"
-    except Exception as e:
-        return False, f"Error writing partitions file: {str(e)}"
-
-def create_install_commands(password, name, size):
-    """
-    Create commands for creating a new partition.
-
-    Args:
-        password (str): sudo password
-        name (str): Name of the new partition
-        size (str): Size of the new partition in GB
-
-    Returns:
-        tuple: (success_boolean, message)
-    """
-    try:
-        partition_name = name.replace(" ", "-").lower()
-
-        # Check current root filesystem size
-        cmd = f'echo {password} | sudo -S lvdisplay /dev/droidian/droidian-rootfs'
-        result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-        if result.returncode != 0:
-            return False, "Failed to get current partition size"
-
-        current_size = None
-        for line in result.stdout.splitlines():
-            if "LV Size" in line:
-                current_size = float(line.split()[2])
-                break
-
-        if current_size is None:
-            return False, "Could not determine current partition size"
-
-        # Calculate new sizes
-        new_size = current_size - float(size)
-
-        # Convert GB to MB for all commands
-        new_size_mb = int(new_size * 1024)
-        size_mb = int(float(size) * 1024)
-
-        # Prepare commands
-        commands = [
-            "e2fsck -p -y -f /dev/droidian/droidian-rootfs",
-            f"resize2fs /dev/droidian/droidian-rootfs {new_size_mb}M",
-            f"lvm lvreduce -L -{size_mb}M -r /dev/droidian/droidian-rootfs",
-            f"lvm lvcreate -L {size_mb}M -n {partition_name} droidian"
-        ]
-
-        # Write commands to file
-        content = "\n".join(commands) + "\n"
-        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/commands']
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-        process.communicate(input=content, timeout=2)
-
-        if process.returncode != 0:
-            return False, "Failed to create commands file"
-
-        # Update wip-partitions file
-        wip_content = f"{partition_name}:{name}\n"
-        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/wip-partitions']
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-        process.communicate(input=wip_content, timeout=2)
-
-        if process.returncode != 0:
-            return False, "Failed to update wip-partitions file"
-
-        return True, "Partition creation queued successfully"
-    except subprocess.TimeoutExpired:
-        return False, "Timeout while queueing partition creation"
-    except Exception as e:
-        return False, f"Error queueing partition creation: {str(e)}"
 
 def read_partitions_file(partitions_file):
-    """
-    Read partitions from the file.
-
-    Args:
-        partitions_file (Path): Path to the partitions file
-
-    Returns:
-        list: List of (partition, name) tuples
-    """
+    """Read and parse the partitions file."""
     try:
-        with open(partitions_file, 'r') as f:
-            content = f.read().strip()
-            return [
-                line.strip().split(':')
+        content = Path(partitions_file).read_text().strip()
+        return [line.strip().split(':')
                 for line in content.split('\n')
-                if ':' in line
-            ]
-    except Exception as e:
-        print(f"Error reading partitions: {str(e)}")
+                if ':' in line]
+    except Exception:
         return []
 
-def delete_install_commands(password, partition_name):
-    """
-    Create commands for deleting a partition and adding its space back to rootfs.
-
-    Args:
-        password (str): sudo password
-        partition_name (str): Name of the partition to delete
-
-    Returns:
-        tuple: (success_boolean, message)
-    """
-    try:
-        # Get size of partition to be deleted
-        cmd = f'echo {password} | sudo -S lvdisplay /dev/droidian/{partition_name}'
-        result = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-        if result.returncode != 0:
-            return False, "Failed to get partition size"
-
-        size = None
-        for line in result.stdout.splitlines():
-            if "LV Size" in line:
-                size = float(line.split()[2])
-                unit = line.split()[3]
-                # Convert to MB if in GB
-                if unit.lower() == 'gib':
-                    size = size * 1024
-                break
-        if size is None:
-            return False, "Could not determine partition size"
-
-        # Create commands to remove partition and extend rootfs
-        commands = [
-            f"lvm lvremove -f /dev/droidian/{partition_name}",
-            f"lvm lvextend -L +{int(size)}M /dev/droidian/droidian-rootfs",
-            "resize2fs /dev/droidian/droidian-rootfs"
-        ]
-
-        # Write commands to file
-        content = "\n".join(commands) + "\n"
-        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/commands']
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-        process.communicate(input=content, timeout=2)
-
-        if process.returncode != 0:
-            return False, "Failed to create commands file"
-
-        # Remove entry from partitions file
-        partitions = []
-        with open('/furios_persist/bootman/partitions', 'r') as f:
-            partitions = [line.strip() for line in f if partition_name not in line]
-
-        content = "\n".join(partitions) + "\n"
-        cmd = ['sudo', '-S', 'tee', '/furios_persist/bootman/partitions']
-        process = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-        process.communicate(input=content, timeout=2)
-
-        if process.returncode != 0:
-            return False, "Failed to update partitions file"
-
-        return True, "Deletion queued successfully"
-    except subprocess.TimeoutExpired:
-        return False, "Timeout while queueing deletion"
-    except Exception as e:
-        return False, f"Error queuing deletion: {str(e)}"
-
 def get_queued_partition():
-    """
-    Check if there's a queued partition install by checking wip-partitions and commands files.
-
-    Returns:
-        tuple: (partition_name, display_name) if found, None otherwise
-    """
+    """Check for any queued partition installations."""
     try:
         wip_file = Path("/furios_persist/bootman/wip-partitions")
         commands_file = Path("/furios_persist/bootman/commands")
@@ -338,14 +192,13 @@ def get_queued_partition():
         if not (wip_file.exists() and commands_file.exists()):
             return None
 
-        with open(wip_file, 'r') as f:
-            content = f.read().strip()
-            if not content:
-                return None
+        content = wip_file.read_text().strip()
+        if not content:
+            return None
 
-            parts = content.split(':')
-            if len(parts) == 2:
-                return (parts[0], parts[1])
+        for line in content.split('\n'):
+            if ':' in line:
+                return tuple(line.strip().split(':'))
 
         return None
     except Exception:
