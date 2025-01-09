@@ -348,7 +348,7 @@ class BootmanWindow(Adw.ApplicationWindow):
                 self.show_toast("Size must be greater than 0")
                 return
             self.install_bottom_sheet.set_open(False)
-            self.show_password_dialog_for_commands(name, size)
+            self.show_queue_warning_dialog(name, size)
         except ValueError:
             self.show_toast("Invalid size value")
 
@@ -383,6 +383,60 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.connect("response", self.on_command_password_response, password_entry, name, size)
         dialog.present()
 
+    def show_queue_warning_dialog(self, name, size):
+        """
+        Show warning dialog when there's already a queued partition.
+
+        Args:
+            name (str): Name of the new installation
+            size (str): Size of the new installation
+        """
+        queued = actions.get_queued_partition()
+        if queued:
+            partition_name, display_name = queued
+            dialog = Adw.MessageDialog(
+                transient_for=self,
+                heading="Partition Already Queued",
+                body=f"A partition installation ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
+                modal=True
+            )
+
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("continue", "Continue")
+            dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
+
+            dialog.connect("response", self.on_queue_warning_response, name, size)
+            dialog.present()
+        else:
+            # No queue exists, proceed directly to password dialog
+            self.show_password_dialog_for_commands(name, size)
+
+    def show_reboot_dialog(self):
+        """Show dialog informing user they can reboot to apply changes."""
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            heading="Installation Queued",
+            body="The installation has been queued successfully. You can now reboot your device for the changes to take effect.",
+            modal=True
+        )
+
+        dialog.add_response("ok", "OK")
+        dialog.present()
+
+    def on_queue_warning_response(self, dialog, response, name, size):
+        """
+        Handle queue warning dialog response.
+
+        Args:
+            dialog: The dialog widget
+            response: User's response
+            name: Name of the new installation
+            size: Size of the new installation
+        """
+        if response == "continue":
+            self.show_password_dialog_for_commands(name, size)
+        dialog.close()
+
     def on_command_password_response(self, dialog, response, password_entry, name, size):
         """
         Handle password dialog response for commands.
@@ -400,6 +454,7 @@ class BootmanWindow(Adw.ApplicationWindow):
             self.show_toast(message)
             if success:
                 self.process_partitions(password)
+                self.show_reboot_dialog()
         dialog.destroy()
 
     def show_delete_dialog(self, partition_name):
