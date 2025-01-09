@@ -175,12 +175,16 @@ def create_install_commands(password, name, size):
         # Calculate new sizes
         new_size = current_size - float(size)
 
+        # Convert GB to MB for all commands
+        new_size_mb = int(new_size * 1024)
+        size_mb = int(float(size) * 1024)
+
         # Prepare commands
         commands = [
-            "e2fsck -f /dev/droidian/droidian-rootfs",
-            f"resize2fs /dev/droidian/droidian-rootfs {new_size:.2f}G",
-            f"lvm lvreduce -L -{size}G -r /dev/droidian/droidian-rootfs",
-            f"lvm lvcreate -L {size}G -n {partition_name} droidian"
+            "e2fsck -p -y -f /dev/droidian/droidian-rootfs",
+            f"resize2fs /dev/droidian/droidian-rootfs {new_size_mb}M",
+            f"lvm lvreduce -L -{size_mb}M -r /dev/droidian/droidian-rootfs",
+            f"lvm lvcreate -L {size_mb}M -n {partition_name} droidian"
         ]
 
         # Write commands to file
@@ -202,7 +206,6 @@ def create_install_commands(password, name, size):
             return False, "Failed to update wip-partitions file"
 
         return True, "Commands and partition info created successfully"
-
     except subprocess.TimeoutExpired:
         return False, "Timeout while creating commands"
     except Exception as e:
