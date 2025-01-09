@@ -159,7 +159,6 @@ def write_partitions_file(partitions, password):
 
         subprocess.run(['sync'], check=True)
         return True, "Partitions file updated successfully"
-
     except subprocess.TimeoutExpired:
         process.kill()
         return False, "Timeout while writing partitions file"
@@ -229,11 +228,11 @@ def create_install_commands(password, name, size):
         if process.returncode != 0:
             return False, "Failed to update wip-partitions file"
 
-        return True, "Commands and partition info created successfully"
+        return True, "Partition creation queued successfully"
     except subprocess.TimeoutExpired:
-        return False, "Timeout while creating commands"
+        return False, "Timeout while queueing partition creation"
     except Exception as e:
-        return False, f"Error creating commands: {str(e)}"
+        return False, f"Error queueing partition creation: {str(e)}"
 
 def read_partitions_file(partitions_file):
     """
@@ -316,8 +315,8 @@ def delete_install_commands(password, partition_name):
         if process.returncode != 0:
             return False, "Failed to update partitions file"
 
-        return True, "Delete commands created successfully"
+        return True, "Deletion queued successfully"
     except subprocess.TimeoutExpired:
-        return False, "Timeout while creating delete commands"
+        return False, "Timeout while queueing deletion"
     except Exception as e:
-        return False, f"Error creating delete commands: {str(e)}"
+        return False, f"Error queuing deletion: {str(e)}"
