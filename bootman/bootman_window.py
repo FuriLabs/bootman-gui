@@ -194,8 +194,10 @@ class BootmanWindow(Adw.ApplicationWindow):
                     if size != "Unknown":
                         row.set_subtitle(f"Size: {size}")
 
-                # Main rootfs should not be removed
-                if partition != 'droidian-rootfs':
+                can_remove = (partition != 'droidian-rootfs' and
+                              not actions.is_partition_mounted(partition))
+
+                if can_remove:
                     delete_button = Gtk.Button()
                     delete_button.set_icon_name("user-trash-symbolic")
                     delete_button.add_css_class("destructive-action")

@@ -1,12 +1,36 @@
 import subprocess
 from pathlib import Path
-import os
 
 def is_mounted(mount_point):
-    """Check if a specific mount point is mounted."""
+    """
+    Check if a specific mount point is currently mounted by reading /proc/mounts.
+
+    Args:
+        mount_point (str): Path of the mount point to check
+
+    Returns:
+        bool: True if the mount point is mounted, False otherwise
+    """
     try:
         with open('/proc/mounts', 'r') as f:
             return any(mount_point in line for line in f)
+    except Exception:
+        return False
+
+def is_partition_mounted(partition_name):
+    """
+    Check if a specific partition is currently mounted by reading /proc/mounts.
+
+    Args:
+        partition_name (str): Name of the partition to check
+
+    Returns:
+        bool: True if mounted, False otherwise
+    """
+    try:
+        device_path = f"/dev/droidian/{partition_name}"
+        with open('/proc/mounts', 'r') as f:
+            return any(device_path in line for line in f)
     except Exception:
         return False
 
