@@ -14,4 +14,6 @@ Architecture: all
 Pre-Depends: ${misc:Pre-Depends}
 Depends: ${misc:Depends},
          ${python3:Depends},
+         lvm2,
+         pkexec,
 Description: Boot manager configuration app for FuriOS
