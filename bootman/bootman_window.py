@@ -263,6 +263,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         name_label.set_width_chars(15)
         name_entry = Gtk.Entry()
         name_entry.set_hexpand(True)
+        name_entry.connect("insert-text", self.on_name_insert)
         name_box.append(name_label)
         name_box.append(name_entry)
         content.append(name_box)
@@ -317,10 +318,25 @@ class BootmanWindow(Adw.ApplicationWindow):
             return True
         return False
 
+    def on_name_insert(self, entry, text, length, position):
+        """
+        Validate name entry to only accept alphanumeric characters.
+
+        Args:
+            entry: The entry widget
+            text: Text being inserted
+            length: Length of text being inserted
+            position: Position of insertion
+        """
+        # Only allow letters and numbers
+        if not all(c.isalnum() for c in text):
+            entry.stop_emission_by_name("insert-text")
+            return True
+        return False
+
     def on_new_install_apply(self, name, size):
         """
         Handle new install application.
-
         Args:
             name (str): Name of the new installation
             size (str): Size of the new installation
@@ -328,6 +344,12 @@ class BootmanWindow(Adw.ApplicationWindow):
         if not name or not size:
             self.show_toast("Name and size are required")
             return
+
+        # Additional validation for name
+        if not all(part.isalnum() for part in name.split()):
+            self.show_toast("Name can only contain letters and numbers")
+            return
+
         try:
             size_num = int(size)
             if size_num <= 0:
