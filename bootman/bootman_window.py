@@ -711,8 +711,12 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.close()
 
         if valid:
-            # File is valid, ask if they want to redownload anyway
-            self.show_redownload_prompt(partition_name, os_name, url, md5_url, file_path)
+            if url:  # This was an existing file verification
+                # Show redownload prompt
+                self.show_redownload_prompt(partition_name, os_name, url, md5_url, file_path)
+            else:  # This was a post-download verification
+                self.show_toast(f"Verification complete - installing {os_name}")
+                self.install_with_progress(partition_name, os_name, file_path)
         else:
             # File is invalid, remove it and start download
             file_path.unlink(missing_ok=True)
@@ -738,7 +742,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         else:
             # User wants to use existing file
             self.show_toast(f"Using existing file for {os_name}")
-            # TODO: implement installation
+            self.install_with_progress(partition_name, os_name, save_path)
 
     def start_download(self, partition_name, os_name, url, md5_url):
         """Start the download process with progress dialog."""
@@ -892,6 +896,85 @@ class BootmanWindow(Adw.ApplicationWindow):
         status_label.set_text(f"Downloaded: {downloaded_mb:.1f} MB / {total_mb:.1f} MB")
         return False
 
+    def setup_progress_dialog(self, title) -> tuple[Adw.Dialog, Gtk.Label, Gtk.TextView, Gtk.Button]:
+        dialog = Adw.Dialog(title=title, can_close=False)
+        dialog.set_content_width(self.get_width())
+        dialog.set_content_height(self.get_height())
+
+        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        content_box.set_margin_top(24)
+        content_box.set_margin_bottom(24)
+        content_box.set_margin_start(24)
+        content_box.set_margin_end(24)
+        dialog.set_child(content_box)
+
+        title_label = Gtk.Label(label=title)
+        title_label.set_halign(Gtk.Align.CENTER)
+        title_label.set_margin_bottom(12)
+        title_label.get_style_context().add_class('heading')
+        content_box.append(title_label)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_vexpand(True)
+        scrolled.get_style_context().add_class('view')
+        content_box.append(scrolled)
+
+        terminal = Gtk.TextView()
+        terminal.set_editable(False)
+        terminal.set_monospace(True)
+        scrolled.set_child(terminal)
+
+        close_button = Gtk.Button(label='Close')
+        close_button.connect('clicked', lambda _: dialog.force_close())
+        close_button.set_halign(Gtk.Align.CENTER)
+        close_button.add_css_class('suggested-action')
+        close_button.set_margin_top(12)
+        close_button.set_sensitive(False)
+        content_box.append(close_button)
+
+        return dialog, title_label, terminal, close_button
+
+    def install_with_progress(self, partition_name, os_name, save_path):
+        """Start installation with progress dialog."""
+        dialog, title_label, terminal, close_button = self.setup_progress_dialog(f"Installing {os_name}...")
+        dialog.present()
+
+        buff = terminal.get_buffer()
+
+        def append_output(line):
+            GLib.idle_add(
+                lambda: buff.insert_at_cursor(line) or
+                terminal.scroll_to_mark(buff.get_insert(), 0.0, False, 0.0, 1.0)
+            )
+
+        def run_install():
+            try:
+                success, message = actions.run_install_commands(
+                    partition_name, save_path, append_output)
+                GLib.idle_add(lambda: self.handle_install_complete(
+                    dialog, title_label, close_button, success, message, os_name))
+            except Exception as e:
+                print(f"error: {e}")
+                GLib.idle_add(lambda: self.handle_install_complete(
+                    dialog, title_label, close_button, False, str(e), os_name))
+
+        # Start installation in background thread
+        install_thread = threading.Thread(target=run_install)
+        install_thread.daemon = True
+        install_thread.start()
+
+    def handle_install_complete(self, dialog, title_label, close_button, success, message, os_name):
+        """Handle installation completion."""
+        if success:
+            title_label.set_text(f"Successfully installed {os_name}!")
+            self.show_toast(f"Successfully installed {os_name}")
+        else:
+            title_label.set_text("Installation Failed!")
+            self.show_error_dialog(f"Installation failed: {message}")
+
+        close_button.set_sensitive(True)
+        return False
+
     def download_complete(self, dialog, save_path, partition_name, os_name):
         """Handle download completion."""
         dialog.close()
@@ -913,8 +996,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         else:
             self.show_toast(f"Download complete: {os_name}")
             print(f"Downloaded image saved to: {save_path}")
-            # TODO: implement installation
-
+            self.install_with_progress(partition_name, os_name, save_path)
         return False
 
     def handle_verification_cancel(self, dialog, response, cancel_event):

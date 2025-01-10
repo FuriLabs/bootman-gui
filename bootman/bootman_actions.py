@@ -269,3 +269,80 @@ def get_os_download_info(os_name):
     if os_name in os_map:
         return os_map[os_name]["url"], os_map[os_name].get("md5_url")
     return None, None
+
+def run_install_commands(partition_name, save_path, output_callback=None):
+    """
+    Create and execute installation commands with elevated privileges.
+
+    Args:
+        partition_name (str): Target partition name
+        save_path (Path): Path to OS image
+        output_callback (callable): Optional callback for output lines
+
+    Returns:
+        tuple: (success_boolean, message)
+    """
+    # Create temporary script
+    script_path = Path("/tmp/bootman_install.sh")
+
+    try:
+        # Create script content with proper command sequence
+        commands = [
+            "#!/bin/bash",
+            "set -e",  # Exit on any error
+            "set -x",  # Echo commands as they are executed
+            "",
+            "# Create mount points",
+            "mkdir -p /mnt_newpart",
+            "mkdir -p /mnt_rootfs",
+            "",
+            f"# Mount partitions",
+            f"mount /dev/droidian/{partition_name} /mnt_newpart",
+            f"mount {save_path} /mnt_rootfs",
+            "",
+            "# Copy files",
+            "rsync --archive -H -A -X --info=name2 /mnt_rootfs/* /mnt_newpart/ || true",
+            "rsync --archive -H -A -X --info=name2 /mnt_rootfs/.[^.]* /mnt_newpart/ || true",
+            "",
+            "# Cleanup",
+            "umount -l /mnt_newpart",
+            "umount -l /mnt_rootfs",
+            "rm -rf /mnt_newpart",
+            "rm -rf /mnt_rootfs"
+        ]
+
+        script_path.write_text("\n".join(commands))
+        script_path.chmod(0o700)
+
+        # Execute with pkexec
+        process = subprocess.Popen(
+            ["pkexec", "/bin/bash", str(script_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+
+        # Read output in real-time
+        while True:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
+                break
+            if line and output_callback:
+                output_callback(line)
+
+        # Get final return code
+        return_code = process.wait()
+        if return_code != 0:
+            return False, f"Installation failed with code {return_code}"
+
+        return True, "Installation completed successfully"
+    except Exception as e:
+        return False, f"Installation error: {str(e)}"
+    finally:
+        # Always clean up the script
+        try:
+            script_path.unlink(missing_ok=True)
+        except Exception as e:
+            print(f"Warning: Failed to remove temporary script: {e}")
