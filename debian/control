@@ -16,4 +16,6 @@ Depends: ${misc:Depends},
          ${python3:Depends},
          lvm2,
          pkexec,
+         python3-urllib3,
+         rsync,
 Description: Boot manager configuration app for FuriOS
