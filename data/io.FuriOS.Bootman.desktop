@@ -1,10 +1,9 @@
 [Desktop Entry]
 Type=Application
-Name=Branchy
-Exec=io.FuriOS.StkTool
-Icon=io.FuriOS.StkTool
+Name=Bootman
+Exec=io.FuriOS.Bootman
+Icon=io.FuriOS.Bootman
 Terminal=false
 Type=Application
 StartupNotify=true
-Keywords=stktool;furios;modem
-NoDisplay=true
+Keywords=bootman;furios
