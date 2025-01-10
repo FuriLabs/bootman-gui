@@ -25,6 +25,9 @@ case "$ACTION" in
     "lvdisplay")
         lvdisplay "$1"
         ;;
+    "remove_wip")
+        rm -f /furios_persist/bootman/wip-partitions
+        ;;
     *)
         echo "Unknown action: $ACTION"
         exit 1

@@ -121,6 +121,11 @@ def delete_install_commands(partition_name):
     if size is None:
         return False, "Could not determine partition size"
 
+    # Remove WIP
+    success, output = run_helper("remove_wip")
+    if not success:
+        return False, "Failed to remove wip"
+
     # Write the command file
     commands = [
         f"lvm lvremove -f /dev/droidian/{partition_name}",
@@ -170,7 +175,7 @@ def list_partitions():
             return []
 
         excluded = ['droidian-persistent', 'droidian-reserved']
-        return [p.name for p in droidian_path.iterdir() 
+        return [p.name for p in droidian_path.iterdir()
                 if p.exists() and p.name not in excluded]
     except Exception:
         return []
@@ -186,21 +191,42 @@ def read_partitions_file(partitions_file):
         return []
 
 def get_queued_partition():
-    """Check for any queued partition installations."""
+    """
+    Check for any queued partition operations.
+
+    Returns:
+        tuple: (operation, partition_name, display_name) where:
+               operation is either 'install' or 'delete'
+               partition_name is the name of the partition
+               display_name is the friendly name for display
+        None: if no queue exists
+    """
     try:
         wip_file = Path("/furios_persist/bootman/wip-partitions")
         commands_file = Path("/furios_persist/bootman/commands")
 
-        if not (wip_file.exists() and commands_file.exists()):
+        # Check if commands file exists
+        if not commands_file.exists():
             return None
 
-        content = wip_file.read_text().strip()
-        if not content:
+        commands_content = commands_file.read_text().strip()
+        if not commands_content:
             return None
 
-        for line in content.split('\n'):
-            if ':' in line:
-                return tuple(line.strip().split(':'))
+        # Check if it's an installation (both files exist)
+        if wip_file.exists():
+            wip_content = wip_file.read_text().strip()
+            if wip_content and ':' in wip_content:
+                partition_name, display_name = wip_content.split(':', 1)
+                return ('install', partition_name.strip(), display_name.strip())
+
+        # If no wip file but commands exist, check for deletion
+        for line in commands_content.split('\n'):
+            if 'lvremove' in line:
+                # Extract partition name from command like "lvm lvremove -f /dev/droidian/partition-name"
+                partition_name = line.split('/')[-1].strip()
+                display_name = partition_name.replace('-', ' ')
+                return ('delete', partition_name, display_name)
 
         return None
     except Exception:

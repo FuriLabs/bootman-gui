@@ -156,15 +156,31 @@ class BootmanWindow(Adw.ApplicationWindow):
         # Check for queued partition
         queued = actions.get_queued_partition()
         if queued:
-            partition_name, display_name = queued
-            row = Adw.ActionRow(title=display_name)
-            row.set_subtitle("Queued for installation")
+            operation, partition_name, display_name = queued
 
-            status_icon = Gtk.Image()
-            status_icon.set_from_icon_name("alarm-symbolic")
+            row = Adw.ActionRow(title=display_name)
+            if operation == 'install':
+                row.set_subtitle("Queued for installation")
+                status_icon = Gtk.Image.new_from_icon_name("document-save-symbolic")
+            else:  # delete
+                row.set_subtitle("Queued for deletion")
+                status_icon = Gtk.Image.new_from_icon_name("user-trash-symbolic")
+
             status_icon.set_margin_start(6)
             status_icon.set_margin_end(6)
             row.add_suffix(status_icon)
+
+            # Create restart button
+            restart_button = Gtk.Button()
+            restart_button.set_icon_name("view-refresh-symbolic")
+            restart_button.set_valign(Gtk.Align.CENTER)
+            restart_button.set_margin_start(6)
+            restart_button.set_margin_end(6)
+            restart_button.add_css_class("suggested-action")
+            restart_button.connect("clicked", lambda btn: self.show_reboot_dialog())
+
+            # Add button to row
+            row.add_suffix(restart_button)
 
             self.queued_list.append(row)
 
@@ -323,32 +339,33 @@ class BootmanWindow(Adw.ApplicationWindow):
             self.show_toast("Invalid size value")
 
     def show_queue_warning_dialog(self, name, size):
-        """
-        Show warning dialog when there's already a queued partition.
+       """
+       Show warning dialog when there's already a queued partition.
+       Args:
+           name (str): Name of the new installation
+           size (str): Size of the new installation
+       """
+       queued = actions.get_queued_partition()
+       if queued:
+           operation, partition_name, display_name = queued
 
-        Args:
-            name (str): Name of the new installation
-            size (str): Size of the new installation
-        """
-        queued = actions.get_queued_partition()
-        if queued:
-            partition_name, display_name = queued
-            dialog = Adw.MessageDialog(
-                transient_for=self,
-                heading="Partition Already Queued",
-                body=f"A partition installation ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
-                modal=True
-            )
+           op_text = "installation" if operation == "install" else "deletion"
+           dialog = Adw.MessageDialog(
+               transient_for=self,
+               heading="Operation Already Queued",
+               body=f"A partition {op_text} ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
+               modal=True
+           )
 
-            dialog.add_response("cancel", "Cancel")
-            dialog.add_response("continue", "Continue")
-            dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
+           dialog.add_response("cancel", "Cancel")
+           dialog.add_response("continue", "Continue")
+           dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
 
-            dialog.connect("response", self.on_queue_warning_response, name, size)
-            dialog.present()
-        else:
-            # No queue exists, proceed directly with creation
-            self.create_new_partition(name, size)
+           dialog.connect("response", self.on_queue_warning_response, name, size)
+           dialog.present()
+       else:
+           # No queue exists, proceed directly with creation
+           self.create_new_partition(name, size)
 
     def create_new_partition(self, name, size):
         """
@@ -366,10 +383,17 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def show_reboot_dialog(self):
         """Show dialog informing user they can reboot to apply changes."""
+        queued = actions.get_queued_partition()
+        if not queued:
+            return
+
+        operation, partition_name, display_name = queued
+        op_text = "installation" if operation == "install" else "deletion"
+
         dialog = Adw.MessageDialog(
             transient_for=self,
-            heading="Installation Queued",
-            body="The installation has been queued successfully. You can now reboot your device for the changes to take effect.",
+            heading=f"{op_text.title()} Queued",
+            body=f"The partition {op_text} has been queued successfully. You can now reboot your device for the changes to take effect.",
             modal=True
         )
 
@@ -393,7 +417,33 @@ class BootmanWindow(Adw.ApplicationWindow):
     def show_delete_dialog(self, partition_name):
         """
         Show confirmation dialog for deleting a partition.
+        Args:
+            partition_name (str): Name of the partition to delete
+        """
+        queued = actions.get_queued_partition()
+        if queued:
+            operation, queued_partition, display_name = queued
+            op_text = "installation" if operation == "install" else "deletion"
 
+            dialog = Adw.MessageDialog(
+                transient_for=self,
+                heading="Operation Already Queued",
+                body=f"A partition {op_text} ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
+                modal=True
+            )
+
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("continue", "Continue")
+            dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
+
+            dialog.connect("response", self.on_delete_warning_response, partition_name)
+            dialog.present()
+        else:
+            self.show_delete_confirmation(partition_name)
+
+    def show_delete_confirmation(self, partition_name):
+        """
+        Show final confirmation dialog for deleting a partition.
         Args:
             partition_name (str): Name of the partition to delete
         """
@@ -410,6 +460,18 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         dialog.connect("response", self.on_delete_response, partition_name)
         dialog.present()
+
+    def on_delete_warning_response(self, dialog, response, partition_name):
+        """
+        Handle queue warning dialog response for deletion.
+        Args:
+            dialog: The dialog widget
+            response: User's response
+            partition_name: Name of the partition to delete
+        """
+        if response == "continue":
+            self.show_delete_confirmation(partition_name)
+        dialog.close()
 
     def on_delete_response(self, dialog, response, partition_name):
         """
