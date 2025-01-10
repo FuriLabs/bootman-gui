@@ -8,7 +8,7 @@ from gi.repository import Gtk, Adw, GLib, Pango, Gio
 from pathlib import Path
 import urllib.request
 import threading
-import os
+import hashlib
 
 import bootman.bootman_actions as actions
 
@@ -588,15 +588,164 @@ class BootmanWindow(Adw.ApplicationWindow):
             partition_name (str): Name of the partition to install to
             os_name (str): Name of the OS to install
         """
-        url = actions.get_os_download_url(os_name)
+        url, md5_url = actions.get_os_download_info(os_name)
         if not url:
             self.show_toast(f"Download URL not found for {os_name}")
             return
 
-        dialog = self.create_download_dialog(partition_name, os_name, url)
+        cache_dir = Path.home() / ".cache" / "bootman"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        save_path = cache_dir / f"{os_name.lower()}-{partition_name}.img"
+
+        # First check for existing file and verify if needed
+        if save_path.exists():
+            if md5_url:
+                # Show verification dialog and start verification in background
+                status_dialog = self.create_status_dialog("Verifying existing file...", os_name)
+                status_dialog.present()
+
+                verify_thread = threading.Thread(
+                    target=self.verify_file_thread,
+                    args=(save_path, md5_url, status_dialog, partition_name, os_name, url)
+                )
+                verify_thread.daemon = True
+                verify_thread.start()
+            else:
+                # No MD5 to verify, show redownload dialog directly
+                self.show_redownload_prompt(partition_name, os_name, url, md5_url, save_path)
+        else:
+            # No existing file, start download directly
+            self.start_download(partition_name, os_name, url, md5_url)
+
+    def create_status_dialog(self, message, os_name):
+        """Create a simple status dialog for operations like verification."""
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            modal=True,
+            heading=f"Processing {os_name}",
+            body=message
+        )
+
+        # Add cancel button
+        dialog.add_response("cancel", "Cancel")
+        dialog.set_response_appearance("cancel", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        return dialog
+
+    def connect_cancel_button(self, dialog, cancel_event):
+        """Connect cancel button to the cancel event."""
+        dialog.connect("response", lambda dlg, resp: self.handle_verification_cancel(dlg, resp, cancel_event))
+        return False
+
+    def verify_file_thread(self, file_path, md5_url, dialog, partition_name, os_name, url):
+        """Verify file in a background thread."""
+        try:
+            # Create cancel event
+            cancel_event = threading.Event()
+            GLib.idle_add(self.connect_cancel_button, dialog, cancel_event)
+
+            # Get expected MD5
+            md5_response = urllib.request.urlopen(md5_url)
+            expected_md5 = md5_response.read().decode().split()[0]
+
+            # Calculate MD5 of existing file
+            md5_hash = hashlib.md5()
+            file_size = file_path.stat().st_size
+            read_size = 0
+
+            f = None
+            try:
+                f = open(file_path, 'rb')
+
+                while True:
+                    if cancel_event.is_set():
+                        f.close()
+                        GLib.idle_add(self.handle_verification_cancelled, dialog)
+                        return
+
+                    buffer = f.read(8192)
+                    if not buffer:
+                        break
+
+                    md5_hash.update(buffer)
+                    read_size += len(buffer)
+
+                    # Update dialog text with progress
+                    progress = read_size / file_size
+                    GLib.idle_add(
+                        lambda: dialog.set_body(f"Verifying: {(progress * 100):.1f}%")
+                    )
+            finally:
+                if f:
+                    f.close()
+
+            if not cancel_event.is_set():
+                calculated_md5 = md5_hash.hexdigest()
+                valid = calculated_md5 == expected_md5
+
+                GLib.idle_add(self.handle_verification_complete,
+                              dialog, valid, file_path, partition_name, os_name, url, md5_url)
+        except Exception as e:
+            print(f"Verification failed: {e}")
+            if not cancel_event.is_set():
+                GLib.idle_add(self.handle_verification_complete,
+                              dialog, False, file_path, partition_name, os_name, url, md5_url)
+
+    def create_redownload_dialog(self, file_path):
+        """Create dialog asking if user wants to redownload existing file."""
+        dialog = Adw.MessageDialog(
+            transient_for=self,
+            modal=True,
+            heading="File Already Exists",
+            body=f"This file has already been downloaded. Do you want to download it again?"
+        )
+
+        dialog.add_response("use_existing", "Use Existing")
+        dialog.add_response("redownload", "Download Again")
+        dialog.set_response_appearance("redownload", Adw.ResponseAppearance.SUGGESTED)
+
+        return dialog
+
+    def handle_verification_complete(self, dialog, valid, file_path, partition_name, os_name, url, md5_url):
+        """Handle completion of file verification."""
+        dialog.close()
+
+        if valid:
+            # File is valid, ask if they want to redownload anyway
+            self.show_redownload_prompt(partition_name, os_name, url, md5_url, file_path)
+        else:
+            # File is invalid, remove it and start download
+            file_path.unlink(missing_ok=True)
+            self.show_toast(f"Existing file is invalid - downloading new copy")
+            self.start_download(partition_name, os_name, url, md5_url)
+        return False
+
+    def show_redownload_prompt(self, partition_name, os_name, url, md5_url, save_path):
+        """Show the redownload dialog."""
+        dialog = self.create_redownload_dialog(save_path)
+        dialog.connect("response", lambda dlg, resp: self.handle_redownload_response(
+            dlg, resp, partition_name, os_name, url, md5_url, save_path))
         dialog.present()
 
-    def create_download_dialog(self, partition_name, os_name, url):
+    def handle_redownload_response(self, dialog, response, partition_name, os_name, url, md5_url, save_path):
+        """Handle user's choice about redownloading."""
+        dialog.close()
+
+        if response == "redownload":
+            # User wants to redownload
+            save_path.unlink(missing_ok=True)
+            self.start_download(partition_name, os_name, url, md5_url)
+        else:
+            # User wants to use existing file
+            self.show_toast(f"Using existing file for {os_name}")
+            # TODO: implement installation
+
+    def start_download(self, partition_name, os_name, url, md5_url):
+        """Start the download process with progress dialog."""
+        dialog = self.create_download_dialog(partition_name, os_name, url, md5_url)
+        dialog.present()
+
+    def create_download_dialog(self, partition_name, os_name, url, md5_url):
         """
         Create a dialog with a progress bar for downloading.
 
@@ -604,6 +753,7 @@ class BootmanWindow(Adw.ApplicationWindow):
             partition_name (str): Target partition name
             os_name (str): Name of OS being installed
             url (str): Download URL
+            md5_url (str): MD5sum Download URL
 
         Returns:
             Adw.MessageDialog: Dialog with progress bar
@@ -650,7 +800,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         cancel_event = threading.Event()
         download_thread = threading.Thread(
             target=self.download_os_image,
-            args=(url, progress_bar, status_label, dialog, cancel_event,
+            args=(url, md5_url, progress_bar, status_label, dialog, cancel_event,
                   partition_name, os_name, download_state)
         )
 
@@ -663,30 +813,32 @@ class BootmanWindow(Adw.ApplicationWindow):
         return dialog
 
     def on_download_response(self, dialog, response, cancel_event, download_state):
-        """
-        Handle dialog response (typically cancel button).
-        """
+        """Handle dialog response (typically cancel button)."""
         if not download_state['completed'] and not download_state['cancelled']:
             download_state['cancelled'] = True
             cancel_event.set()
             self.show_toast("Download cancelled")
         dialog.close()
 
-    def download_os_image(self, url, progress_bar, status_label, dialog,
+    def download_os_image(self, url, md5_url, progress_bar, status_label, dialog,
                           cancel_event, partition_name, os_name, download_state):
-        """Download OS image with progress updates."""
+        """Download OS image with progress updates and MD5 verification if available."""
         try:
+            cache_dir = Path.home() / ".cache" / "bootman"
+            save_path = cache_dir / f"{os_name.lower()}-{partition_name}.img"
+
+            # Download new file
             response = urllib.request.urlopen(url)
             total_size = int(response.headers.get('content-length', 0))
             block_size = 8192
             downloaded = 0
+            md5_hash = hashlib.md5()
 
-            save_path = f"/tmp/{os_name.lower()}-{partition_name}.img"
             with open(save_path, 'wb') as f:
                 while True:
                     if cancel_event.is_set():
                         # Clean up partial download
-                        os.unlink(save_path)
+                        save_path.unlink(missing_ok=True)
                         return
 
                     buffer = response.read(block_size)
@@ -695,6 +847,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
                     downloaded += len(buffer)
                     f.write(buffer)
+                    md5_hash.update(buffer)
 
                     # Update progress
                     progress = downloaded / total_size
@@ -705,6 +858,18 @@ class BootmanWindow(Adw.ApplicationWindow):
                                   downloaded,
                                   total_size)
 
+            # Verify MD5 if we have it
+            if md5_url:
+                try:
+                    md5_response = urllib.request.urlopen(md5_url)
+                    expected_md5 = md5_response.read().decode().split()[0]
+                    calculated_md5 = md5_hash.hexdigest()
+                    if calculated_md5 != expected_md5:
+                        raise Exception("MD5 verification failed")
+                except Exception as e:
+                    print(f"MD5 verification failed: {e}")
+                    raise
+
             # Download complete
             download_state['completed'] = True
             GLib.idle_add(self.download_complete,
@@ -712,35 +877,9 @@ class BootmanWindow(Adw.ApplicationWindow):
                           save_path,
                           partition_name,
                           os_name)
-
         except Exception as e:
             if not cancel_event.is_set():
                 GLib.idle_add(self.download_error, dialog, str(e))
-
-    def download_complete(self, dialog, save_path, partition_name, os_name):
-        """Handle download completion."""
-        dialog.close()
-        self.show_toast(f"Download complete: {os_name}")
-        print(f"Downloaded image saved to: {save_path}")
-        return False
-
-    def download_error(self, dialog, error_message):
-        """Handle download error."""
-        dialog.close()
-        self.show_error_dialog(f"Download failed: {error_message}")
-        return False
-
-    def cancel_download(self, cancel_event, dialog):
-        """
-        Handle download cancellation.
-
-        Args:
-            cancel_event (threading.Event): Event to signal cancellation
-            dialog (Adw.MessageDialog): Dialog to close
-        """
-        cancel_event.set()
-        dialog.close()
-        self.show_toast("Download cancelled")
 
     def update_progress(self, progress_bar, status_label, progress, downloaded, total):
         """Update progress bar and status label."""
@@ -756,9 +895,38 @@ class BootmanWindow(Adw.ApplicationWindow):
     def download_complete(self, dialog, save_path, partition_name, os_name):
         """Handle download completion."""
         dialog.close()
-        self.show_toast(f"Download complete: {os_name}")
-        print(f"Downloaded image saved to: {save_path}")
-        # TODO: implement installation
+
+        # Get the md5_url again since we don't have it from the download context
+        _, md5_url = actions.get_os_download_info(os_name)
+
+        if md5_url:
+            # Show verification dialog and start verification in background
+            status_dialog = self.create_status_dialog("Verifying downloaded file...", os_name)
+            status_dialog.present()
+
+            verify_thread = threading.Thread(
+                target=self.verify_file_thread,
+                args=(save_path, md5_url, status_dialog, partition_name, os_name, None)  # url is None since we don't need to redownload
+            )
+            verify_thread.daemon = True
+            verify_thread.start()
+        else:
+            self.show_toast(f"Download complete: {os_name}")
+            print(f"Downloaded image saved to: {save_path}")
+            # TODO: implement installation
+
+        return False
+
+    def handle_verification_cancel(self, dialog, response, cancel_event):
+        """Handle cancel button click during verification."""
+        if response == "cancel":
+            dialog.close()  # Close dialog immediately
+            cancel_event.set()
+
+    def handle_verification_cancelled(self, dialog):
+        """Handle when verification is cancelled."""
+        dialog.close()
+        self.show_toast("Verification cancelled")
         return False
 
     def download_error(self, dialog, error_message):

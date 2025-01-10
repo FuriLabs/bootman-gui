@@ -247,17 +247,25 @@ def get_supported_operating_systems():
         )
     ]
 
-def get_os_download_url(os_name):
+def get_os_download_info(os_name):
     """
-    Get the download URL for a specific operating system.
+    Get the download information for a specific operating system.
 
     Args:
         os_name (str): Name of the operating system
 
     Returns:
-        str: URL to download the OS image, or None if not found
+        tuple: (url, md5_url) or (None, None) if not found
+        url is the OS image URL
+        md5_url is the MD5 checksum URL (can be None if no MD5 verification needed)
     """
-    url_map = {
-        "FuriOS": "https://filedump.furios.io/krypton/vendor-1.img"
+    os_map = {
+        "FuriOS": {
+            "url": "https://filedump.furios.io/rootfs/rootfs.img",
+            "md5_url": "https://filedump.furios.io/rootfs/rootfs.img.md5"
+        }
     }
-    return url_map.get(os_name)
+
+    if os_name in os_map:
+        return os_map[os_name]["url"], os_map[os_name].get("md5_url")
+    return None, None
