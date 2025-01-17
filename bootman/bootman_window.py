@@ -110,7 +110,7 @@ class BootmanWindow(Adw.ApplicationWindow):
     def check_mount_and_partitions(self):
         """Check if the partition is mounted and process partitions."""
         try:
-            if not actions.is_mounted("/furios_persist"):
+            if not actions.is_mounted("/var/lib/furios-persist"):
                 success, message = actions.mount_partition()
                 if success:
                     self.process_partitions()
@@ -124,7 +124,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def process_partitions(self):
         """Process and display partitions."""
-        partitions_file = Path("/furios_persist/bootman/partitions")
+        partitions_file = Path("/var/lib/furios-persist/bootman/partitions")
 
         if not partitions_file.exists():
             try:

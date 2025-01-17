@@ -51,7 +51,7 @@ def get_partition_size(partition_name):
     return "Unknown"
 
 def write_partitions_file(partitions):
-    """Write partitions to /furios_persist/bootman/partitions file."""
+    """Write partitions to //var/lib/furios-persist/bootman/partitions file."""
     content = ''
     for partition in partitions:
         display_name = process_partition_name(partition)
@@ -137,7 +137,7 @@ def delete_install_commands(partition_name):
         return False, "Failed to write commands"
 
     # Update partitions file
-    success, output = run_helper("cat", "/furios_persist/bootman/partitions")
+    success, output = run_helper("cat", "/var/lib/furios-persist/bootman/partitions")
     if success:
         partitions = [line.strip() for line in output.splitlines() if partition_name not in line]
         content = "\n".join(partitions)
@@ -202,8 +202,8 @@ def get_queued_partition():
         None: if no queue exists
     """
     try:
-        wip_file = Path("/furios_persist/bootman/wip-partitions")
-        commands_file = Path("/furios_persist/bootman/commands")
+        wip_file = Path("/var/lib/furios-persist/bootman/wip-partitions")
+        commands_file = Path("/var/lib/furios-persist/bootman/commands")
 
         # Check if commands file exists
         if not commands_file.exists():
