@@ -7,26 +7,33 @@ set -e
 ACTION="$1"
 shift
 
+if [ -f /usr/lib/furios/device/furios-persist-partition ]; then
+    source /usr/lib/furios/device/furios-persist-partition
+else
+    echo "furios-persist is not supported"
+    exit 1
+fi
+
 case "$ACTION" in
     "mount")
-        mkdir -p /furios_persist
-        mount /dev/disk/by-partlabel/furios_persist /furios_persist
-        mkdir -p /furios_persist/bootman
+        mkdir -p /var/lib/furios-persist
+        mount "${FURIOS_PERSIST}" /var/lib/furios-persist
+        mkdir -p /var/lib/furios-persist/bootman
         ;;
     "write_partitions")
-        echo "$1" > /furios_persist/bootman/partitions
+        echo "$1" > /var/lib/furios-persist/bootman/partitions
         ;;
     "write_commands")
-        echo "$1" > /furios_persist/bootman/commands
+        echo "$1" > /var/lib/furios-persist/bootman/commands
         ;;
     "write_wip")
-        echo "$1" > /furios_persist/bootman/wip-partitions
+        echo "$1" > /var/lib/furios-persist/bootman/wip-partitions
         ;;
     "lvdisplay")
         lvdisplay "$1"
         ;;
     "remove_wip")
-        rm -f /furios_persist/bootman/wip-partitions
+        rm -f /var/lib/furios-persist/bootman/wip-partitions
         ;;
     *)
         echo "Unknown action: $ACTION"
