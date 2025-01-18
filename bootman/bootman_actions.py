@@ -145,7 +145,11 @@ def delete_install_commands(partition_name):
         if not success:
             return False, "Failed to update partitions file"
 
+    remove_partition_entry(partition_name)
     return True, "Deletion queued successfully"
+
+def remove_partition_entry(partition_name):
+    return run_helper("remove_entry", partition_name)
 
 def is_mounted(mount_point):
     """Check if a mount point is currently mounted."""
