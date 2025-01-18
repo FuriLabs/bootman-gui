@@ -35,6 +35,9 @@ case "$ACTION" in
     "remove_wip")
         rm -f /var/lib/furios-persist/bootman/wip-partitions
         ;;
+    "remove_entry")
+        sed -i "/^$1:/d" /var/lib/furios-persist/bootman/partitions
+        ;;
     *)
         echo "Unknown action: $ACTION"
         exit 1
