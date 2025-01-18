@@ -87,7 +87,7 @@ def create_install_commands(name, size):
         "e2fsck -fy /dev/droidian/droidian-rootfs",
         f"resize2fs /dev/droidian/droidian-rootfs {new_size_mb}M",
         f"lvm lvreduce -L -{size_mb}M -r /dev/droidian/droidian-rootfs",
-        f"lvm lvcreate -L {size_mb}M -n {partition_name} droidian",
+        f"lvm lvcreate -L {size_mb}M -n {partition_name} droidian -y",
         f"mke2fs /dev/droidian/{partition_name}",
         f"e2fsck -fy /dev/droidian/{partition_name}"
     ]
@@ -130,6 +130,7 @@ def delete_install_commands(partition_name):
     commands = [
         f"lvm lvremove -f /dev/droidian/{partition_name}",
         f"lvm lvextend -L +{int(size)}M /dev/droidian/droidian-rootfs",
+        "e2fsck -fy /dev/droidian/droidian-rootfs",
         "resize2fs /dev/droidian/droidian-rootfs"
     ]
     success, _ = run_helper("write_commands", "\n".join(commands))
