@@ -21,12 +21,15 @@ case "$ACTION" in
         mkdir -p /var/lib/furios-persist/bootman
         ;;
     "write_partitions")
+        mkdir -p /var/lib/furios-persist/bootman
         echo "$1" > /var/lib/furios-persist/bootman/partitions
         ;;
     "write_commands")
+        mkdir -p /var/lib/furios-persist/bootman
         echo "$1" > /var/lib/furios-persist/bootman/commands
         ;;
     "write_wip")
+        mkdir -p /var/lib/furios-persist/bootman
         echo "$1" > /var/lib/furios-persist/bootman/wip-partitions
         ;;
     "lvdisplay")
