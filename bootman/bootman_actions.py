@@ -4,6 +4,7 @@
 import subprocess
 from pathlib import Path
 import threading
+import os
 
 _command_lock = threading.Lock()
 HELPER_PATH = "/usr/libexec/bootman-helper"
@@ -40,14 +41,19 @@ def mount_partition():
 
 def get_partition_size(partition_name):
     """Get the size of a specific LVM partition."""
-    success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+    if os.path.exists(f"/dev/droidian/{partition_name}"):
+        success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
 
-    if success:
-        for line in output.splitlines():
-            if "LV Size" in line:
-                size = line.split()[2]
-                unit = line.split()[3]
-                return f"{size}{unit}"
+        if success:
+            for line in output.splitlines():
+                if "LV Size" in line:
+                    size = line.split()[2]
+                    unit = line.split()[3]
+                    return f"{size}{unit}"
+    elif os.path.exists(partition_name):
+        success, output = run_helper("blockdev", partition_name)
+        if success:
+            return f"{int(output) / (1024 * 1024 * 1024):.1f}GiB"
     return "Unknown"
 
 def write_partitions_file(partitions):
@@ -102,52 +108,80 @@ def create_install_commands(name, size):
 
     return True, "Partition creation queued successfully"
 
-def delete_install_commands(partition_name):
+def create_external_install_commands(name, storage_location):
+   """
+   Create commands for creating a new partition on external storage.
+   Args:
+       name (str): Name of the new installation
+       storage_location (str): Path to external storage device
+   Returns:
+       tuple: (success (bool), message (str))
+   """
+   commands = [
+       f"mke2fs {storage_location}"
+   ]
+
+   success, _ = run_helper("write_commands", "\n".join(commands))
+   if not success:
+       return False, "Failed to write commands"
+
+   success, _ = run_helper("write_wip", f"{storage_location}:{name}")
+   if not success:
+       return False, "Failed to write wip file"
+
+   return True, "External partition creation queued successfully"
+
+def create_delete_commands(partition_name):
     """Create commands for deleting a partition."""
-    # Get partition size
-    success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
-    if not success:
-        return False, "Failed to get partition size"
-
-    size = None
-    for line in output.splitlines():
-        if "LV Size" in line:
-            size = float(line.split()[2])
-            unit = line.split()[3]
-            if unit.lower() == 'gib':
-                size = size * 1024
-            break
-
-    if size is None:
-        return False, "Could not determine partition size"
-
-    # Remove WIP
-    success, output = run_helper("remove_wip")
-    if not success:
-        return False, "Failed to remove wip"
-
-    # Write the command file
-    commands = [
-        f"lvm lvremove -f /dev/droidian/{partition_name}",
-        f"lvm lvextend -L +{int(size)}M /dev/droidian/droidian-rootfs",
-        "e2fsck -fy /dev/droidian/droidian-rootfs",
-        "resize2fs /dev/droidian/droidian-rootfs"
-    ]
-    success, _ = run_helper("write_commands", "\n".join(commands))
-    if not success:
-        return False, "Failed to write commands"
-
-    # Update partitions file
-    success, output = run_helper("cat", "/var/lib/furios-persist/bootman/partitions")
-    if success:
-        partitions = [line.strip() for line in output.splitlines() if partition_name not in line]
-        content = "\n".join(partitions)
-        success, _ = run_helper("write_partitions", content)
+    if os.path.exists(f"/dev/droidian/{partition_name}"):
+        # Get partition size
+        success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
         if not success:
-            return False, "Failed to update partitions file"
+            return False, "Failed to get partition size"
 
-    remove_partition_entry(partition_name)
-    return True, "Deletion queued successfully"
+        size = None
+        for line in output.splitlines():
+            if "LV Size" in line:
+                size = float(line.split()[2])
+                unit = line.split()[3]
+                if unit.lower() == 'gib':
+                    size = size * 1024
+                break
+
+        if size is None:
+            return False, "Could not determine partition size"
+
+        # Remove WIP
+        success, output = run_helper("remove_wip")
+        if not success:
+            return False, "Failed to remove wip"
+
+        # Write the command file
+        commands = [
+            f"lvm lvremove -f /dev/droidian/{partition_name}",
+            f"lvm lvextend -L +{int(size)}M /dev/droidian/droidian-rootfs",
+            "e2fsck -fy /dev/droidian/droidian-rootfs",
+            "resize2fs /dev/droidian/droidian-rootfs"
+        ]
+        success, _ = run_helper("write_commands", "\n".join(commands))
+        if not success:
+            return False, "Failed to write commands"
+
+        # Update partitions file
+        success, output = run_helper("cat", "/var/lib/furios-persist/bootman/partitions")
+        if success:
+            partitions = [line.strip() for line in output.splitlines() if partition_name not in line]
+            content = "\n".join(partitions)
+            success, _ = run_helper("write_partitions", content)
+            if not success:
+                return False, "Failed to update partitions file"
+
+        remove_partition_entry(partition_name)
+        return True, "Deletion queued successfully"
+    elif os.path.exists(partition_name):
+        remove_partition_entry(partition_name)
+        return True, f"Successfully deleted external storage install"
+    return False, "Partition is not available"
 
 def remove_partition_entry(partition_name):
     return run_helper("remove_entry", partition_name)
@@ -287,6 +321,14 @@ def run_install_commands(partition_name, save_path, output_callback=None):
     Returns:
         tuple: (success_boolean, message)
     """
+    if os.path.exists(f"/dev/droidian/{partition_name}"):
+        partition_path = f"/dev/droidian/{partition_name}"
+    elif os.path.exists(partition_name):
+        partition_path = partition_name
+    else:
+        print("Partition path does not exist. something is seriously wrong")
+        return
+
     # Create temporary script
     script_path = Path("/tmp/bootman_install.sh")
 
@@ -302,7 +344,8 @@ def run_install_commands(partition_name, save_path, output_callback=None):
             "mkdir -p /mnt_rootfs",
             "",
             f"# Mount partitions",
-            f"mount /dev/droidian/{partition_name} /mnt_newpart",
+            f"umount -l {partition_path} || true",
+            f"mount {partition_path} /mnt_newpart",
             f"mount {save_path} /mnt_rootfs",
             "",
             "# Copy files",
@@ -351,3 +394,39 @@ def run_install_commands(partition_name, save_path, output_callback=None):
             script_path.unlink(missing_ok=True)
         except Exception as e:
             print(f"Warning: Failed to remove temporary script: {e}")
+
+def get_ignore_list():
+    """
+    Retrieves list of partition devices to ignore from config file.
+
+    Returns:
+        list: Device paths to ignore, empty if config not found
+    """
+    ignore_file = '/usr/lib/furios/device/bootman-ignore-partition'
+    try:
+        with open(ignore_file, 'r') as f:
+            ignore_list = f.read().strip().split(':')
+        return ignore_list
+    except FileNotFoundError:
+        print(f"Ignore file '{ignore_file}' not found. Skipping ignore list.")
+        return []
+
+def get_external_disks():
+   """
+   Gets list of external disk partitions, filtering special devices and ignores.
+
+   Returns:
+       list: Device paths of external disk partitions
+   """
+   cmd = "lsblk -l -n -o NAME,TYPE | grep ' part$'"
+   result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+   ignore_list = get_ignore_list()
+
+   valid_partitions = []
+   for line in result.stdout.strip().split('\n'):
+       if line.strip():
+           dev_path = f"/dev/{line.split()[0]}"
+           if os.path.exists(dev_path) and not any(dev_path.startswith(ignore) for ignore in ignore_list):
+               valid_partitions.append(dev_path)
+
+   return valid_partitions

@@ -39,7 +39,11 @@ case "$ACTION" in
         rm -f /var/lib/furios-persist/bootman/wip-partitions
         ;;
     "remove_entry")
-        sed -i "/^$1:/d" /var/lib/furios-persist/bootman/partitions
+        entry=$(echo "$1" | sed 's/\//\\\//g')
+        sed -i "/^$entry:/d" /var/lib/furios-persist/bootman/partitions
+        ;;
+    "blockdev")
+        blockdev --getsize64 "$1"
         ;;
     *)
         echo "Unknown action: $ACTION"

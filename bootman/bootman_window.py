@@ -279,6 +279,31 @@ class BootmanWindow(Adw.ApplicationWindow):
         size_box.append(size_entry)
         content.append(size_box)
 
+        expander = Adw.ExpanderRow()
+        expander.set_title("Storage Location")
+
+        def on_storage_selection_changed(button):
+            size_entry.set_sensitive(button == local_button)
+
+        local_button = Gtk.CheckButton()
+        local_button.set_label("Install to local storage")
+        local_button.set_active(True)
+        local_button.connect("toggled", on_storage_selection_changed)
+        expander.add_row(local_button)
+
+        external_disks = actions.get_external_disks()
+        external_buttons = {}
+
+        for disk in external_disks:
+            ext_button = Gtk.CheckButton()
+            ext_button.set_label(f"Install to external storage ({disk})")
+            ext_button.set_group(local_button)
+            ext_button.connect("toggled", on_storage_selection_changed)
+            expander.add_row(ext_button)
+            external_buttons[ext_button] = disk
+
+        content.append(expander)
+
         button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         button_box.set_homogeneous(True)
         button_box.set_margin_top(12)
@@ -289,11 +314,27 @@ class BootmanWindow(Adw.ApplicationWindow):
         cancel_button.connect("clicked", lambda _: self.install_bottom_sheet.set_open(False))
         button_box.append(cancel_button)
 
+        def get_selected_storage():
+            if local_button.get_active():
+                return None
+            for button, disk in external_buttons.items():
+                if button.get_active():
+                    return disk
+            return None
+
         apply_button = Gtk.Button(label="Apply")
         apply_button.set_hexpand(True)
         apply_button.set_halign(Gtk.Align.FILL)
         apply_button.add_css_class("suggested-action")
-        apply_button.connect("clicked", lambda _: self.on_new_install_apply(name_entry.get_text(), size_entry.get_text()))
+        apply_button.connect(
+            "clicked",
+            lambda x, y=name_entry, z=size_entry: self.on_new_install_apply(
+                y.get_text(),
+                z.get_text() if local_button.get_active() else None,
+                get_selected_storage()
+            )
+        )
+
         button_box.append(apply_button)
 
         content.append(button_box)
@@ -334,14 +375,15 @@ class BootmanWindow(Adw.ApplicationWindow):
             return True
         return False
 
-    def on_new_install_apply(self, name, size):
+    def on_new_install_apply(self, name, size, storage_location=None):
         """
         Handle new install application.
         Args:
             name (str): Name of the new installation
             size (str): Size of the new installation
+            storage_location (str, optional): Path to external storage location. None for local install.
         """
-        if not name or not size:
+        if not name:
             self.show_toast("Name and size are required")
             return
 
@@ -350,22 +392,28 @@ class BootmanWindow(Adw.ApplicationWindow):
             self.show_toast("Name can only contain letters and numbers")
             return
 
-        try:
-            size_num = int(size)
-            if size_num <= 0:
-                self.show_toast("Size must be greater than 0")
+        if storage_location is None:  # Local install
+            if not size:
+                self.show_toast("Size is required for local installation")
                 return
-            self.install_bottom_sheet.set_open(False)
-            self.show_queue_warning_dialog(name, size)
-        except ValueError:
-            self.show_toast("Invalid size value")
+            try:
+                size_num = int(size)
+                if size_num <= 0:
+                    self.show_toast("Size must be greater than 0")
+                    return
+            except ValueError:
+                self.show_toast("Invalid size value")
 
-    def show_queue_warning_dialog(self, name, size):
+        self.install_bottom_sheet.set_open(False)
+        self.show_queue_warning_dialog(name, size, storage_location)
+
+    def show_queue_warning_dialog(self, name, size, storage_location=None):
        """
        Show warning dialog when there's already a queued partition.
        Args:
            name (str): Name of the new installation
            size (str): Size of the new installation
+           storage_location (str, optional): Path to external storage location. None for local install.
        """
        queued = actions.get_queued_partition()
        if queued:
@@ -383,21 +431,26 @@ class BootmanWindow(Adw.ApplicationWindow):
            dialog.add_response("continue", "Continue")
            dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
 
-           dialog.connect("response", self.on_queue_warning_response, name, size)
+           dialog.connect("response", self.on_queue_warning_response, name, size, storage_location)
            dialog.present()
        else:
            # No queue exists, proceed directly with creation
-           self.create_new_partition(name, size)
+           self.create_new_partition(name, size, storage_location)
 
-    def create_new_partition(self, name, size):
+    def create_new_partition(self, name, size, storage_location=None):
         """
         Create a new partition.
 
         Args:
             name (str): Name of the new installation
             size (str): Size of the new installation
+            storage_location (str, optional): Path to external storage location. None for local install.
         """
-        success, message = actions.create_install_commands(name, size)
+        if storage_location:
+            success, message = actions.create_external_install_commands(name, storage_location)
+        else:
+            success, message = actions.create_install_commands(name, size)
+
         self.show_toast(message)
         if success:
             self.process_partitions()
@@ -505,7 +558,7 @@ class BootmanWindow(Adw.ApplicationWindow):
             partition_name: Name of the partition to delete
         """
         if response == "delete":
-            success, message = actions.delete_install_commands(partition_name)
+            success, message = actions.create_delete_commands(partition_name)
             self.show_toast(message)
             if success:
                 self.process_partitions()
@@ -595,7 +648,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         cache_dir = Path.home() / ".cache" / "bootman"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        save_path = cache_dir / f"{os_name.lower()}-{partition_name}.img"
+        save_path = cache_dir / f"{os_name.lower()}.img"
 
         # First check for existing file and verify if needed
         if save_path.exists():
@@ -829,7 +882,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         """Download OS image with progress updates and MD5 verification if available."""
         try:
             cache_dir = Path.home() / ".cache" / "bootman"
-            save_path = cache_dir / f"{os_name.lower()}-{partition_name}.img"
+            save_path = cache_dir / f"{os_name.lower()}.img"
 
             # Download new file
             response = urllib.request.urlopen(url)
