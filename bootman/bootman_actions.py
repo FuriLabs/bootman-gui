@@ -4,6 +4,7 @@
 import subprocess
 from pathlib import Path
 import threading
+import tempfile
 import os
 
 _command_lock = threading.Lock()
@@ -285,6 +286,11 @@ def get_supported_operating_systems():
             "FuriOS",
             "FuriOS is a Linux OS for mobile devices from FuriLabs",
             "computer-symbolic"
+        ),
+        (
+            "Ubuntu Touch",
+            "Ubuntu Touch is a mobile version of Ubuntu",
+            "computer-symbolic"
         )
     ]
 
@@ -304,6 +310,10 @@ def get_os_download_info(os_name):
         "FuriOS": {
             "url": "https://filedump.furios.io/rootfs/rootfs.img",
             "md5_url": "https://filedump.furios.io/rootfs/rootfs.img.md5"
+        },
+        "Ubuntu Touch": {
+            "url": "https://filedump.furios.io/rootfs/rootfs-ubports.img",
+            "md5_url": "https://filedump.furios.io/rootfs/rootfs-ubports.img.md5"
         }
     }
 
@@ -348,7 +358,7 @@ def run_install_commands(partition_name, save_path, output_callback=None):
             f"# Mount partitions",
             f"umount -l {partition_path} || true",
             f"mount {partition_path} /mnt_newpart",
-            f"mount {save_path} /mnt_rootfs",
+            f"mount \"{save_path}\" /mnt_rootfs",
             "",
             "# Copy files",
             "rsync --archive -H -A -X --info=name2 /mnt_rootfs/* /mnt_newpart/ || true",
@@ -432,3 +442,211 @@ def get_external_disks():
                valid_partitions.append(dev_path)
 
    return valid_partitions
+
+def is_ubuntu_partition_available():
+    if os.path.exists("/dev/droidian/ubuntu-userdata"):
+        return True
+    return False
+
+def create_ubuntu_userdata_commands(partition_name):
+    """
+    Reduce a given partition to 4GB and create a new ubuntu-userdata partition
+    with the remaining space.
+
+    Args:
+        partition_name: Name of the partition to resize
+
+    Returns:
+        tuple: (success, message)
+    """
+    # Get current partition size
+    success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+    if not success:
+        return False, f"Failed to get current partition size for {partition_name}"
+
+    current_size = None
+    for line in output.splitlines():
+        if "LV Size" in line:
+            size_str = line.split()[2].replace(',', '.')
+            current_size = float(size_str)
+            break
+
+    if current_size is None:
+        return False, f"Could not determine current partition size for {partition_name}"
+
+    # Calculate new sizes
+    target_size = 4.0  # 4GB for the original partition
+    if current_size <= target_size:
+        return False, f"Partition {partition_name} is already 4GB or smaller"
+
+    remaining_size = current_size - target_size
+    target_size_mb = int(target_size * 1024)
+    remaining_size_mb = int(remaining_size * 1024)
+
+    # Save the owner partition name to a file
+    owner_file = "/var/lib/furios-persist/bootman/ubuntu-userdata"
+
+    # Create a temporary script
+    temp_script = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.sh')
+    script_path = temp_script.name
+
+    try:
+        # Write commands to the script
+        temp_script.write(f"#!/bin/bash\necho '{partition_name}' > {owner_file}\n")
+        temp_script.close()
+
+        # Make the script executable
+        os.chmod(script_path, 0o755)
+
+        # Execute with pkexec
+        process = subprocess.Popen(
+            ["pkexec", "/bin/bash", str(script_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+
+        # Wait for the process to complete
+        stdout, _ = process.communicate()
+
+        if process.returncode != 0:
+            return False, f"Failed to save ubuntu-userdata owner: {stdout}"
+
+    except Exception as e:
+        return False, f"Error saving ubuntu-userdata owner: {str(e)}"
+    finally:
+        # Clean up the temporary script
+        try:
+            os.unlink(script_path)
+        except:
+            pass
+
+    # Write the command file
+    commands = [
+        f"e2fsck -fy /dev/droidian/{partition_name}",
+        f"resize2fs /dev/droidian/{partition_name} {target_size_mb}M",
+        f"lvm lvreduce -L {target_size_mb}M -r /dev/droidian/{partition_name}",
+        "lvm lvcreate -L {0}M -n ubuntu-userdata droidian -y".format(remaining_size_mb),
+        "mke2fs /dev/droidian/ubuntu-userdata",
+        "e2fsck -fy /dev/droidian/ubuntu-userdata"
+    ]
+
+    success, _ = run_helper("write_commands", "\n".join(commands))
+    if not success:
+        return False, "Failed to write commands"
+
+    # Write the wip file
+    success, _ = run_helper("write_wip", "ubuntu-userdata:Ubuntu Userdata")
+    if not success:
+        return False, "Failed to write wip file"
+
+    return True, "Ubuntu UserData partition creation queued successfully"
+
+def create_delete_ubuntu_commands(partition_name):
+    """Create commands for deleting an Ubuntu partition and its userdata partition."""
+    # Check if the main partition exists
+    if not os.path.exists(f"/dev/droidian/{partition_name}"):
+        return False, "Ubuntu partition is not available"
+
+    # Check if the ubuntu-userdata partition exists
+    if not os.path.exists("/dev/droidian/ubuntu-userdata"):
+        return False, "Ubuntu userdata partition is not available"
+
+    # Get main partition size
+    success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+    if not success:
+        return False, "Failed to get main partition size"
+
+    main_size = None
+    for line in output.splitlines():
+        if "LV Size" in line:
+            size_str = line.split()[2].replace(",", ".")
+            main_size = float(size_str)
+            unit = line.split()[3]
+            if unit.lower() == 'gib':
+                main_size = main_size * 1024
+            break
+
+    if main_size is None:
+        return False, "Could not determine main partition size"
+
+    # Get userdata partition size
+    success, output = run_helper("lvdisplay", "/dev/droidian/ubuntu-userdata")
+    if not success:
+        return False, "Failed to get userdata partition size"
+
+    userdata_size = None
+    for line in output.splitlines():
+        if "LV Size" in line:
+            size_str = line.split()[2].replace(",", ".")
+            userdata_size = float(size_str)
+            unit = line.split()[3]
+            if unit.lower() == 'gib':
+                userdata_size = userdata_size * 1024
+            break
+
+    if userdata_size is None:
+        return False, "Could not determine userdata partition size"
+
+    # Total size to reclaim
+    total_size = int(main_size) + int(userdata_size)
+
+    # Remove WIP
+    success, output = run_helper("remove_wip")
+    if not success:
+        return False, "Failed to remove wip"
+
+    # Write the command file
+    commands = [
+        # Remove both partitions
+        f"lvm lvremove -f /dev/droidian/{partition_name}",
+        "lvm lvremove -f /dev/droidian/ubuntu-userdata",
+        # Extend the root filesystem with the total reclaimed space
+        f"lvm lvextend -L +{total_size}M /dev/droidian/droidian-rootfs",
+        # Check and resize the root filesystem
+        "e2fsck -fy /dev/droidian/droidian-rootfs",
+        "resize2fs /dev/droidian/droidian-rootfs"
+    ]
+
+    success, _ = run_helper("write_commands", "\n".join(commands))
+    if not success:
+        return False, "Failed to write commands"
+
+    # Update partitions file
+    success, output = run_helper("cat", "/var/lib/furios-persist/bootman/partitions")
+    if success:
+        partitions = [line.strip() for line in output.splitlines()
+                      if partition_name not in line and "ubuntu-userdata" not in line]
+        content = "\n".join(partitions)
+        success, _ = run_helper("write_partitions", content)
+        if not success:
+            return False, "Failed to update partitions file"
+
+    # Remove both partition entries
+    remove_partition_entry(partition_name)
+    remove_partition_entry("ubuntu-userdata")
+
+    return True, "Deletion of Ubuntu and userdata partitions queued successfully"
+
+def get_ubuntu_userdata_owner():
+    """
+    Get the partition name that owns the ubuntu-userdata partition.
+
+    Returns:
+        str or None: The partition name if found, None otherwise
+    """
+    owner_file = "/var/lib/furios-persist/bootman/ubuntu-userdata"
+
+    # Check if the file exists
+    if not os.path.exists(owner_file):
+        return None
+
+    # Read the file content
+    try:
+        with open(owner_file, 'r') as f:
+            owner = f.read().strip()
+            return owner if owner else None
+    except Exception:
+        return None
