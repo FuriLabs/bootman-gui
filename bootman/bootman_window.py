@@ -199,14 +199,36 @@ class BootmanWindow(Adw.ApplicationWindow):
             self.partition_list.remove(row)
 
         try:
+            ubuntu_userdata_owner = actions.get_ubuntu_userdata_owner()
+
+            # Skip ubuntu-userdata in the display loop
+            skip_partitions = ["ubuntu-userdata"] if ubuntu_userdata_owner else []
+
             partitions = actions.read_partitions_file(partitions_file)
 
             for partition_name, display_name in partitions:
+                # Skip the userdata partition as we'll show it merged with its owner
+                if partition_name in skip_partitions:
+                    continue
+
                 row = Adw.ActionRow(title=display_name)
 
-                size = actions.get_partition_size(partition_name)
-                if size != "Unknown":
-                    row.set_subtitle(f"Size: {size}")
+                # If this is the Ubuntu Touch partition, modify the display
+                if ubuntu_userdata_owner and partition_name == ubuntu_userdata_owner:
+                    size = actions.get_partition_size(partition_name)
+                    userdata_size = actions.get_partition_size("ubuntu-userdata")
+
+                    if size != "Unknown" and userdata_size != "Unknown":
+                        row.set_subtitle(f"Ubuntu Touch - System: {size}, Userdata: {userdata_size}")
+                    elif size != "Unknown":
+                        row.set_subtitle(f"Ubuntu Touch - System: {size}")
+                    else:
+                        row.set_subtitle("Ubuntu Touch")
+                else:
+                    # Normal partition display
+                    size = actions.get_partition_size(partition_name)
+                    if size != "Unknown":
+                        row.set_subtitle(f"Size: {size}")
 
                 can_remove = (partition_name != 'droidian-rootfs' and
                               not actions.is_partition_mounted(partition_name))
@@ -404,38 +426,47 @@ class BootmanWindow(Adw.ApplicationWindow):
             except ValueError:
                 self.show_toast("Invalid size value")
 
+        partition_name = name.replace(" ", "-").lower()
+        if partition_name == "ubuntu-userdata":
+            self.show_toast("Partition name is reserved")
+            return
+
         self.install_bottom_sheet.set_open(False)
-        self.show_queue_warning_dialog(name, size, storage_location)
+        self.show_queue_warning_dialog(self.create_new_partition, name, size, storage_location)
 
-    def show_queue_warning_dialog(self, name, size, storage_location=None):
-       """
-       Show warning dialog when there's already a queued partition.
-       Args:
-           name (str): Name of the new installation
-           size (str): Size of the new installation
-           storage_location (str, optional): Path to external storage location. None for local install.
-       """
-       queued = actions.get_queued_partition()
-       if queued:
-           operation, partition_name, display_name = queued
+    def show_queue_warning_dialog(self, callback, *callback_args, **callback_kwargs):
+        """
+        Show warning dialog when there's already a queued partition.
 
-           op_text = "installation" if operation == "install" else "deletion"
-           dialog = Adw.MessageDialog(
-               transient_for=self,
-               heading="Operation Already Queued",
-               body=f"A partition {op_text} ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
-               modal=True
-           )
+        Args:
+            callback (callable): Function to call if user confirms or if no queue exists
+            *callback_args: Positional arguments to pass to the callback
+            **callback_kwargs: Keyword arguments to pass to the callback
+        """
+        queued = actions.get_queued_partition()
+        if queued:
+            operation, partition_name, display_name = queued
+            op_text = "installation" if operation == "install" else "deletion"
+            dialog = Adw.MessageDialog(
+                transient_for=self,
+                heading="Operation Already Queued",
+                body=f"A partition {op_text} ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
+                modal=True
+            )
+            dialog.add_response("cancel", "Cancel")
+            dialog.add_response("continue", "Continue")
+            dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
 
-           dialog.add_response("cancel", "Cancel")
-           dialog.add_response("continue", "Continue")
-           dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
+            # Store callback and args in dialog for use in response handler
+            dialog.callback = callback
+            dialog.callback_args = callback_args
+            dialog.callback_kwargs = callback_kwargs
 
-           dialog.connect("response", self.on_queue_warning_response, name, size, storage_location)
-           dialog.present()
-       else:
-           # No queue exists, proceed directly with creation
-           self.create_new_partition(name, size, storage_location)
+            dialog.connect("response", self.on_queue_warning_response)
+            dialog.present()
+        else:
+            # No queue exists, proceed directly with the callback
+            callback(*callback_args, **callback_kwargs)
 
     def create_new_partition(self, name, size, storage_location=None):
         """
@@ -475,7 +506,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.add_response("ok", "OK")
         dialog.present()
 
-    def on_queue_warning_response(self, dialog, response, name, size):
+    def on_queue_warning_response(self, dialog, response):
         """
         Handle queue warning dialog response.
 
@@ -486,7 +517,7 @@ class BootmanWindow(Adw.ApplicationWindow):
             size: Size of the new installation
         """
         if response == "continue":
-            self.create_new_partition(name, size)
+            dialog.callback(*dialog.callback_args, **dialog.callback_kwargs)
         dialog.close()
 
     def show_delete_dialog(self, partition_name):
@@ -495,26 +526,10 @@ class BootmanWindow(Adw.ApplicationWindow):
         Args:
             partition_name (str): Name of the partition to delete
         """
-        queued = actions.get_queued_partition()
-        if queued:
-            operation, queued_partition, display_name = queued
-            op_text = "installation" if operation == "install" else "deletion"
-
-            dialog = Adw.MessageDialog(
-                transient_for=self,
-                heading="Operation Already Queued",
-                body=f"A partition {op_text} ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
-                modal=True
-            )
-
-            dialog.add_response("cancel", "Cancel")
-            dialog.add_response("continue", "Continue")
-            dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
-
-            dialog.connect("response", self.on_delete_warning_response, partition_name)
-            dialog.present()
-        else:
-            self.show_delete_confirmation(partition_name)
+        self.show_queue_warning_dialog(
+            self.show_delete_confirmation,
+            partition_name
+        )
 
     def show_delete_confirmation(self, partition_name):
         """
@@ -536,18 +551,6 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.connect("response", self.on_delete_response, partition_name)
         dialog.present()
 
-    def on_delete_warning_response(self, dialog, response, partition_name):
-        """
-        Handle queue warning dialog response for deletion.
-        Args:
-            dialog: The dialog widget
-            response: User's response
-            partition_name: Name of the partition to delete
-        """
-        if response == "continue":
-            self.show_delete_confirmation(partition_name)
-        dialog.close()
-
     def on_delete_response(self, dialog, response, partition_name):
         """
         Handle partition deletion response.
@@ -558,7 +561,13 @@ class BootmanWindow(Adw.ApplicationWindow):
             partition_name: Name of the partition to delete
         """
         if response == "delete":
-            success, message = actions.create_delete_commands(partition_name)
+            ubuntu_owner = actions.get_ubuntu_userdata_owner()
+            if ubuntu_owner and ubuntu_owner == partition_name:
+                # Ubuntu Touch partition (needs special handling)
+                success, message = actions.create_delete_ubuntu_commands(partition_name)
+            else:
+                # Normal partition
+                success, message = actions.create_delete_commands(partition_name)
             self.show_toast(message)
             if success:
                 self.process_partitions()
@@ -581,11 +590,6 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         dialog.add_response("ok", "OK")
         dialog.present()
-
-    def refresh_ui(self):
-        """Refresh all UI elements."""
-        self.process_partitions()
-        self.display_queued_partition()
 
     def create_os_popover(self, partition_name):
         """
@@ -641,6 +645,29 @@ class BootmanWindow(Adw.ApplicationWindow):
             partition_name (str): Name of the partition to install to
             os_name (str): Name of the OS to install
         """
+
+        if os_name == "Ubuntu Touch":
+            if actions.is_ubuntu_partition_available():
+                self.show_toast("An Ubuntu Touch installation exists already")
+                return
+
+            self.show_queue_warning_dialog(
+                self.proceed_with_os_install,
+                partition_name,
+                os_name
+            )
+        else:
+            # Proceed with normal installation flow
+            self.proceed_with_os_install(partition_name, os_name)
+
+    def proceed_with_os_install(self, partition_name, os_name):
+        """
+        Proceed with OS installation.
+
+        Args:
+            partition_name (str): Name of the partition to install to
+            os_name (str): Name of the OS to install
+        """
         url, md5_url = actions.get_os_download_info(os_name)
         if not url:
             self.show_toast(f"Download URL not found for {os_name}")
@@ -656,7 +683,6 @@ class BootmanWindow(Adw.ApplicationWindow):
                 # Show verification dialog and start verification in background
                 status_dialog = self.create_status_dialog("Verifying existing file...", os_name)
                 status_dialog.present()
-
                 verify_thread = threading.Thread(
                     target=self.verify_file_thread,
                     args=(save_path, md5_url, status_dialog, partition_name, os_name, url)
@@ -1005,20 +1031,25 @@ class BootmanWindow(Adw.ApplicationWindow):
                 success, message = actions.run_install_commands(
                     partition_name, save_path, append_output)
                 GLib.idle_add(lambda: self.handle_install_complete(
-                    dialog, title_label, close_button, success, message, os_name))
+                    dialog, title_label, close_button, success, message, os_name, partition_name))
             except Exception as e:
                 print(f"error: {e}")
                 GLib.idle_add(lambda: self.handle_install_complete(
-                    dialog, title_label, close_button, False, str(e), os_name))
+                    dialog, title_label, close_button, False, str(e), os_name, partition_name))
 
         # Start installation in background thread
         install_thread = threading.Thread(target=run_install)
         install_thread.daemon = True
         install_thread.start()
 
-    def handle_install_complete(self, dialog, title_label, close_button, success, message, os_name):
+    def handle_install_complete(self, dialog, title_label, close_button, success, message, os_name, partition_name):
         """Handle installation completion."""
         if success:
+            if os_name == "Ubuntu Touch":
+                success, message = actions.create_ubuntu_userdata_commands(partition_name)
+                if not success:
+                    self.show_toast(message)
+
             title_label.set_text(f"Successfully installed {os_name}!")
             self.show_toast(f"Successfully installed {os_name}")
         else:
