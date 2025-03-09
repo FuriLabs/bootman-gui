@@ -284,7 +284,7 @@ def get_supported_operating_systems():
     return [
         (
             "FuriOS",
-            "FuriOS is a Linux OS for mobile devices from FuriLabs",
+            "FuriOS is a Debian based system made by FuriLabs",
             "computer-symbolic"
         ),
         (
