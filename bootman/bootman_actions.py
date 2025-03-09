@@ -424,24 +424,24 @@ def get_ignore_list():
         return []
 
 def get_external_disks():
-   """
-   Gets list of external disk partitions, filtering special devices and ignores.
+    """
+    Gets list of external disk partitions, filtering special devices and ignores.
 
-   Returns:
-       list: Device paths of external disk partitions
-   """
-   cmd = "lsblk -l -n -o NAME,TYPE | grep ' part$'"
-   result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-   ignore_list = get_ignore_list()
+    Returns:
+        list: Device paths of external disk partitions
+    """
+    cmd = "lsblk -l -n -o NAME,TYPE | grep ' part$'"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    ignore_list = get_ignore_list()
 
-   valid_partitions = []
-   for line in result.stdout.strip().split('\n'):
-       if line.strip():
-           dev_path = f"/dev/{line.split()[0]}"
-           if os.path.exists(dev_path) and not any(dev_path.startswith(ignore) for ignore in ignore_list):
-               valid_partitions.append(dev_path)
+    valid_partitions = []
+    for line in result.stdout.strip().split('\n'):
+        if line.strip():
+            dev_path = f"/dev/{line.split()[0]}"
+            if os.path.exists(dev_path) and not any(dev_path.startswith(ignore) for ignore in ignore_list):
+                valid_partitions.append(dev_path)
 
-   return valid_partitions
+    return valid_partitions
 
 def is_ubuntu_partition_available():
     if os.path.exists("/dev/droidian/ubuntu-userdata"):
