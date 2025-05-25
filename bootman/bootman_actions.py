@@ -40,11 +40,21 @@ def mount_partition():
     """Mount the FuriOS persist partition."""
     return run_helper("mount")
 
+def get_lvm_type():
+    """Get the LVM type by checking which volume group exists."""
+    if os.path.exists("/dev/furios"):
+        return "furios"
+    elif os.path.exists("/dev/droidian"):
+        return "droidian"
+    else:
+        return ""
+
 def get_partition_size(partition_name):
     """Get the size of a specific LVM partition."""
-    if os.path.exists(f"/dev/droidian/{partition_name}"):
-        success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+    lvm_type = get_lvm_type()
 
+    if lvm_type and os.path.exists(f"/dev/{lvm_type}/{partition_name}"):
+        success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/{partition_name}")
         if success:
             for line in output.splitlines():
                 if "LV Size" in line:
@@ -69,9 +79,13 @@ def write_partitions_file(partitions):
 def create_install_commands(name, size):
     """Create commands for creating a new partition."""
     partition_name = name.replace(" ", "-").lower()
+    lvm_type = get_lvm_type()
+
+    if not lvm_type:
+        return False, "No LVM volume group found"
 
     # Get current root filesystem size
-    success, output = run_helper("lvdisplay", "/dev/droidian/droidian-rootfs")
+    success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/{lvm_type}-rootfs")
     if not success:
         return False, "Failed to get current partition size"
 
@@ -81,7 +95,6 @@ def create_install_commands(name, size):
             size_str = line.split()[2].replace(',', '.')
             current_size = float(size_str)
             break
-
     if current_size is None:
         return False, "Could not determine current partition size"
 
@@ -92,13 +105,14 @@ def create_install_commands(name, size):
 
     # Write the command file
     commands = [
-        "e2fsck -fy /dev/droidian/droidian-rootfs",
-        f"resize2fs /dev/droidian/droidian-rootfs {new_size_mb}M",
-        f"lvm lvreduce -L -{size_mb}M -r /dev/droidian/droidian-rootfs",
-        f"lvm lvcreate -L {size_mb}M -n {partition_name} droidian -y",
-        f"mke2fs /dev/droidian/{partition_name}",
-        f"e2fsck -fy /dev/droidian/{partition_name}"
+        f"e2fsck -fy /dev/{lvm_type}/{lvm_type}-rootfs",
+        f"resize2fs /dev/{lvm_type}/{lvm_type}-rootfs {new_size_mb}M",
+        f"lvm lvreduce -L -{size_mb}M -r /dev/{lvm_type}/{lvm_type}-rootfs",
+        f"lvm lvcreate -L {size_mb}M -n {partition_name} {lvm_type} -y",
+        f"mke2fs /dev/{lvm_type}/{partition_name}",
+        f"e2fsck -fy /dev/{lvm_type}/{partition_name}"
     ]
+
     success, _ = run_helper("write_commands", "\n".join(commands))
     if not success:
         return False, "Failed to write commands"
@@ -107,7 +121,6 @@ def create_install_commands(name, size):
     success, _ = run_helper("write_wip", f"{partition_name}:{name}")
     if not success:
         return False, "Failed to write wip file"
-
     return True, "Partition creation queued successfully"
 
 def create_external_install_commands(name, storage_location):
@@ -135,9 +148,11 @@ def create_external_install_commands(name, storage_location):
 
 def create_delete_commands(partition_name):
     """Create commands for deleting a partition."""
-    if os.path.exists(f"/dev/droidian/{partition_name}"):
+    lvm_type = get_lvm_type()
+
+    if lvm_type and os.path.exists(f"/dev/{lvm_type}/{partition_name}"):
         # Get partition size
-        success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+        success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/{partition_name}")
         if not success:
             return False, "Failed to get partition size"
 
@@ -161,11 +176,12 @@ def create_delete_commands(partition_name):
 
         # Write the command file
         commands = [
-            f"lvm lvremove -f /dev/droidian/{partition_name}",
-            f"lvm lvextend -L +{int(size)}M /dev/droidian/droidian-rootfs",
-            "e2fsck -fy /dev/droidian/droidian-rootfs",
-            "resize2fs /dev/droidian/droidian-rootfs"
+            f"lvm lvremove -f /dev/{lvm_type}/{partition_name}",
+            f"lvm lvextend -L +{int(size)}M /dev/{lvm_type}/{lvm_type}-rootfs",
+            f"e2fsck -fy /dev/{lvm_type}/{lvm_type}-rootfs",
+            f"resize2fs /dev/{lvm_type}/{lvm_type}-rootfs"
         ]
+
         success, _ = run_helper("write_commands", "\n".join(commands))
         if not success:
             return False, "Failed to write commands"
@@ -199,7 +215,10 @@ def is_mounted(mount_point):
 def is_partition_mounted(partition_name):
     """Check if a specific partition is currently mounted."""
     try:
-        return Path('/proc/mounts').read_text().find(f"/dev/droidian/{partition_name}") != -1
+        lvm_type = get_lvm_type()
+        if lvm_type:
+            return Path('/proc/mounts').read_text().find(f"/dev/{lvm_type}/{partition_name}") != -1
+        return False
     except Exception:
         return False
 
@@ -212,12 +231,16 @@ def process_partition_name(partition_name):
 def list_partitions():
     """List all available partitions."""
     try:
-        droidian_path = Path("/dev/droidian")
-        if not droidian_path.exists():
+        lvm_type = get_lvm_type()
+        if not lvm_type:
             return []
 
-        excluded = ['droidian-persistent', 'droidian-reserved']
-        return [p.name for p in droidian_path.iterdir()
+        lvm_path = Path(f"/dev/{lvm_type}")
+        if not lvm_path.exists():
+            return []
+
+        excluded = [f'{lvm_type}-persistent', f'{lvm_type}-reserved']
+        return [p.name for p in lvm_path.iterdir()
                 if p.exists() and p.name not in excluded]
     except Exception:
         return []
@@ -324,17 +347,17 @@ def get_os_download_info(os_name):
 def run_install_commands(partition_name, save_path, output_callback=None):
     """
     Create and execute installation commands with elevated privileges.
-
     Args:
         partition_name (str): Target partition name
         save_path (Path): Path to OS image
         output_callback (callable): Optional callback for output lines
-
     Returns:
         tuple: (success_boolean, message)
     """
-    if os.path.exists(f"/dev/droidian/{partition_name}"):
-        partition_path = f"/dev/droidian/{partition_name}"
+    lvm_type = get_lvm_type()
+
+    if lvm_type and os.path.exists(f"/dev/{lvm_type}/{partition_name}"):
+        partition_path = f"/dev/{lvm_type}/{partition_name}"
     elif os.path.exists(partition_name):
         partition_path = partition_name
     else:
@@ -343,7 +366,6 @@ def run_install_commands(partition_name, save_path, output_callback=None):
 
     # Create temporary script
     script_path = Path("/tmp/bootman_install.sh")
-
     try:
         # Create script content with proper command sequence
         commands = [
@@ -389,6 +411,7 @@ def run_install_commands(partition_name, save_path, output_callback=None):
             line = process.stdout.readline()
             if not line and process.poll() is not None:
                 break
+
             if line and output_callback:
                 output_callback(line)
 
@@ -396,7 +419,6 @@ def run_install_commands(partition_name, save_path, output_callback=None):
         return_code = process.wait()
         if return_code != 0:
             return False, f"Installation failed with code {return_code}"
-
         return True, "Installation completed successfully"
     except Exception as e:
         return False, f"Installation error: {str(e)}"
@@ -452,15 +474,18 @@ def create_ubuntu_userdata_commands(partition_name):
     """
     Reduce a given partition to 4GB and create a new ubuntu-userdata partition
     with the remaining space.
-
     Args:
         partition_name: Name of the partition to resize
-
     Returns:
         tuple: (success, message)
     """
+    lvm_type = get_lvm_type()
+
+    if not lvm_type:
+        return False, "No LVM volume group found"
+
     # Get current partition size
-    success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+    success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/{partition_name}")
     if not success:
         return False, f"Failed to get current partition size for {partition_name}"
 
@@ -489,7 +514,6 @@ def create_ubuntu_userdata_commands(partition_name):
     # Create a temporary script
     temp_script = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.sh')
     script_path = temp_script.name
-
     try:
         # Write commands to the script
         temp_script.write(f"#!/bin/bash\necho '{partition_name}' > {owner_file}\n")
@@ -510,10 +534,8 @@ def create_ubuntu_userdata_commands(partition_name):
 
         # Wait for the process to complete
         stdout, _ = process.communicate()
-
         if process.returncode != 0:
             return False, f"Failed to save ubuntu-userdata owner: {stdout}"
-
     except Exception as e:
         return False, f"Error saving ubuntu-userdata owner: {str(e)}"
     finally:
@@ -522,15 +544,14 @@ def create_ubuntu_userdata_commands(partition_name):
             os.unlink(script_path)
         except:
             pass
-
     # Write the command file
     commands = [
-        f"e2fsck -fy /dev/droidian/{partition_name}",
-        f"resize2fs /dev/droidian/{partition_name} {target_size_mb}M",
-        f"lvm lvreduce -L {target_size_mb}M -r /dev/droidian/{partition_name}",
-        "lvm lvcreate -L {0}M -n ubuntu-userdata droidian -y".format(remaining_size_mb),
-        "mke2fs /dev/droidian/ubuntu-userdata",
-        "e2fsck -fy /dev/droidian/ubuntu-userdata"
+        f"e2fsck -fy /dev/{lvm_type}/{partition_name}",
+        f"resize2fs /dev/{lvm_type}/{partition_name} {target_size_mb}M",
+        f"lvm lvreduce -L {target_size_mb}M -r /dev/{lvm_type}/{partition_name}",
+        f"lvm lvcreate -L {remaining_size_mb}M -n ubuntu-userdata {lvm_type} -y",
+        f"mke2fs /dev/{lvm_type}/ubuntu-userdata",
+        f"e2fsck -fy /dev/{lvm_type}/ubuntu-userdata"
     ]
 
     success, _ = run_helper("write_commands", "\n".join(commands))
@@ -541,21 +562,25 @@ def create_ubuntu_userdata_commands(partition_name):
     success, _ = run_helper("write_wip", "ubuntu-userdata:Ubuntu Userdata")
     if not success:
         return False, "Failed to write wip file"
-
     return True, "Ubuntu UserData partition creation queued successfully"
 
 def create_delete_ubuntu_commands(partition_name):
     """Create commands for deleting an Ubuntu partition and its userdata partition."""
+    lvm_type = get_lvm_type()
+
+    if not lvm_type:
+        return False, "No LVM volume group found"
+
     # Check if the main partition exists
-    if not os.path.exists(f"/dev/droidian/{partition_name}"):
+    if not os.path.exists(f"/dev/{lvm_type}/{partition_name}"):
         return False, "Ubuntu partition is not available"
 
     # Check if the ubuntu-userdata partition exists
-    if not os.path.exists("/dev/droidian/ubuntu-userdata"):
+    if not os.path.exists(f"/dev/{lvm_type}/ubuntu-userdata"):
         return False, "Ubuntu userdata partition is not available"
 
     # Get main partition size
-    success, output = run_helper("lvdisplay", f"/dev/droidian/{partition_name}")
+    success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/{partition_name}")
     if not success:
         return False, "Failed to get main partition size"
 
@@ -573,7 +598,7 @@ def create_delete_ubuntu_commands(partition_name):
         return False, "Could not determine main partition size"
 
     # Get userdata partition size
-    success, output = run_helper("lvdisplay", "/dev/droidian/ubuntu-userdata")
+    success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/ubuntu-userdata")
     if not success:
         return False, "Failed to get userdata partition size"
 
@@ -601,13 +626,13 @@ def create_delete_ubuntu_commands(partition_name):
     # Write the command file
     commands = [
         # Remove both partitions
-        f"lvm lvremove -f /dev/droidian/{partition_name}",
-        "lvm lvremove -f /dev/droidian/ubuntu-userdata",
+        f"lvm lvremove -f /dev/{lvm_type}/{partition_name}",
+        f"lvm lvremove -f /dev/{lvm_type}/ubuntu-userdata",
         # Extend the root filesystem with the total reclaimed space
-        f"lvm lvextend -L +{total_size}M /dev/droidian/droidian-rootfs",
+        f"lvm lvextend -L +{total_size}M /dev/{lvm_type}/{lvm_type}-rootfs",
         # Check and resize the root filesystem
-        "e2fsck -fy /dev/droidian/droidian-rootfs",
-        "resize2fs /dev/droidian/droidian-rootfs"
+        f"e2fsck -fy /dev/{lvm_type}/{lvm_type}-rootfs",
+        f"resize2fs /dev/{lvm_type}/{lvm_type}-rootfs"
     ]
 
     success, _ = run_helper("write_commands", "\n".join(commands))
@@ -627,7 +652,6 @@ def create_delete_ubuntu_commands(partition_name):
     # Remove both partition entries
     remove_partition_entry(partition_name)
     remove_partition_entry("ubuntu-userdata")
-
     return True, "Deletion of Ubuntu and userdata partitions queued successfully"
 
 def get_ubuntu_userdata_owner():

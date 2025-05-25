@@ -230,7 +230,7 @@ class BootmanWindow(Adw.ApplicationWindow):
                     if size != "Unknown":
                         row.set_subtitle(f"Size: {size}")
 
-                can_remove = (partition_name != 'droidian-rootfs' and
+                can_remove = (partition_name != 'droidian-rootfs' and partition_name != 'furios-rootfs' and
                               not actions.is_partition_mounted(partition_name))
 
                 if can_remove:
