@@ -379,6 +379,7 @@ def run_install_commands(partition_name, save_path, output_callback=None):
             "",
             f"# Mount partitions",
             f"umount -l {partition_path} || true",
+            f"mkfs.ext4 -F {partition_path}",
             f"mount {partition_path} /mnt_newpart",
             f"mount -o ro \"{save_path}\" /mnt_rootfs",
             "",
