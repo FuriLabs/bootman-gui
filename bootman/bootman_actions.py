@@ -380,7 +380,7 @@ def run_install_commands(partition_name, save_path, output_callback=None):
             f"# Mount partitions",
             f"umount -l {partition_path} || true",
             f"mount {partition_path} /mnt_newpart",
-            f"mount \"{save_path}\" /mnt_rootfs",
+            f"mount -o ro \"{save_path}\" /mnt_rootfs",
             "",
             "# Copy files",
             "rsync --archive -H -A -X --info=name2 /mnt_rootfs/* /mnt_newpart/ || true",
