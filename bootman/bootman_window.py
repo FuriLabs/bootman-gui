@@ -4,13 +4,14 @@
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, GLib, Pango, Gio
+from gi.repository import Gtk, Adw, GLib
 from pathlib import Path
 import urllib.request
 import threading
 import hashlib
 
 import bootman.bootman_actions as actions
+from bootman import ui
 
 class BootmanWindow(Adw.ApplicationWindow):
     def __init__(self, *args, **kwargs):
@@ -18,59 +19,23 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.connect("close-request", lambda _: exit(0))
         self.set_default_size(400, 600)
 
-        self.toast_overlay = Adw.ToastOverlay()
-        self.toolbar_view = Adw.ToolbarView()
-        self.install_bottom_sheet = Adw.BottomSheet()
-        self.install_bottom_sheet.set_modal(True)
+        # Initialize UI components
+        self.setup_ui()
+        self.present()
+
+        # Delayed check for mount and partitions
+        GLib.timeout_add(100, self.delayed_check_mount_and_partitions)
+
+    def setup_ui(self):
+        """Setup the main UI layout."""
+        # Create main layout
+        self.toast_overlay, self.toolbar_view, self.install_bottom_sheet, self.navigation_view = ui.create_main_window_layout()
 
         # Header setup
-        self.header = Adw.HeaderBar()
-        self.header.set_title_widget(Adw.WindowTitle(title="Boot Manager"))
-        add_button = Gtk.Button()
-        add_button.set_icon_name("list-add-symbolic")
-        add_button.connect("clicked", self.show_new_install_dialog)
-        self.header.pack_end(add_button)
+        self.header = ui.create_header_bar(self.show_new_install_dialog)
 
         # Content setup
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        content_box.set_margin_top(12)
-        content_box.set_margin_bottom(12)
-        content_box.set_margin_start(12)
-        content_box.set_margin_end(12)
-
-        # Installed Systems section
-        systems_label = Gtk.Label(label="Installed Systems")
-        systems_label.set_halign(Gtk.Align.START)
-        systems_label.set_margin_bottom(6)
-        attr_list = Pango.AttrList()
-        attr_list.insert(Pango.attr_weight_new(Pango.Weight.BOLD))
-        systems_label.set_attributes(attr_list)
-        content_box.append(systems_label)
-
-        self.partition_list = Gtk.ListBox()
-        self.partition_list.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.partition_list.add_css_class("boxed-list")
-        content_box.append(self.partition_list)
-
-        # Add spacing between sections
-        separator = Gtk.Box()
-        separator.set_margin_top(12)
-        separator.set_margin_bottom(12)
-        content_box.append(separator)
-
-        # Queued Partitions section
-        queued_label = Gtk.Label(label="Queued Partition")
-        queued_label.set_halign(Gtk.Align.START)
-        queued_label.set_margin_bottom(6)
-        attr_list = Pango.AttrList()
-        attr_list.insert(Pango.attr_weight_new(Pango.Weight.BOLD))
-        queued_label.set_attributes(attr_list)
-        content_box.append(queued_label)
-
-        self.queued_list = Gtk.ListBox()
-        self.queued_list.set_selection_mode(Gtk.SelectionMode.NONE)
-        self.queued_list.add_css_class("boxed-list")
-        content_box.append(self.queued_list)
+        content_box, self.partition_list, self.queued_list = ui.create_content_layout()
 
         # Navigation and layout setup
         self.main_page = Adw.NavigationPage(title="Main Page")
@@ -79,18 +44,8 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.main_box.append(content_box)
         self.main_page.set_child(self.main_box)
 
-        self.navigation_view = Adw.NavigationView()
         self.navigation_view.add(self.main_page)
-
-        self.install_bottom_sheet.set_content(self.navigation_view)
-        self.toolbar_view.set_content(self.install_bottom_sheet)
-        self.toast_overlay.set_child(self.toolbar_view)
         self.set_content(self.toast_overlay)
-
-        self.present()
-
-        # Delayed check for mount and partitions
-        GLib.timeout_add(100, self.delayed_check_mount_and_partitions)
 
     def show_toast(self, message, duration=3):
         """Display a toast message."""
@@ -146,270 +101,140 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def display_queued_partition(self):
         """Display any queued partition in the queued list."""
-        # Clear existing list
-        while True:
-            row = self.queued_list.get_first_child()
-            if row is None:
-                break
-            self.queued_list.remove(row)
+        ui.clear_list_widget(self.queued_list)
 
         # Check for queued partition
         queued = actions.get_queued_partition()
         if queued:
             operation, partition_name, display_name = queued
-
-            row = Adw.ActionRow(title=display_name)
-            if operation == 'install':
-                row.set_subtitle("Queued for installation")
-                status_icon = Gtk.Image.new_from_icon_name("document-save-symbolic")
-            else:  # delete
-                row.set_subtitle("Queued for deletion")
-                status_icon = Gtk.Image.new_from_icon_name("user-trash-symbolic")
-
-            status_icon.set_margin_start(6)
-            status_icon.set_margin_end(6)
-            row.add_suffix(status_icon)
-
-            # Create restart button
-            restart_button = Gtk.Button()
-            restart_button.set_icon_name("view-refresh-symbolic")
-            restart_button.set_valign(Gtk.Align.CENTER)
-            restart_button.set_margin_start(6)
-            restart_button.set_margin_end(6)
-            restart_button.add_css_class("suggested-action")
-            restart_button.connect("clicked", lambda btn: self.show_reboot_dialog())
-
-            # Add button to row
-            row.add_suffix(restart_button)
-
+            row = ui.create_queued_partition_row(display_name, operation,
+                                                 lambda btn: self.show_reboot_dialog())
             self.queued_list.append(row)
 
     def display_partitions(self, partitions_file):
-        """
-        Display partitions in the UI list.
-
-        Args:
-            partitions_file (Path): Path to the partitions file
-        """
-        # Clear existing list
-        while True:
-            row = self.partition_list.get_first_child()
-            if row is None:
-                break
-            self.partition_list.remove(row)
+        """Display partitions in the UI list."""
+        ui.clear_list_widget(self.partition_list)
 
         try:
             ubuntu_userdata_owner = actions.get_ubuntu_userdata_owner()
-
-            # Skip ubuntu-userdata in the display loop
             skip_partitions = ["ubuntu-userdata"] if ubuntu_userdata_owner else []
-
             partitions = actions.read_partitions_file(partitions_file)
+            is_encrypted = actions.is_encrypted()
 
             for partition_name, display_name in partitions:
                 # Skip the userdata partition as we'll show it merged with its owner
                 if partition_name in skip_partitions:
                     continue
 
-                row = Adw.ActionRow(title=display_name)
-
-                # If this is the Ubuntu Touch partition, modify the display
+                # Determine subtitle
+                subtitle = None
                 if ubuntu_userdata_owner and partition_name == ubuntu_userdata_owner:
                     size = actions.get_partition_size(partition_name)
                     userdata_size = actions.get_partition_size("ubuntu-userdata")
 
                     if size != "Unknown" and userdata_size != "Unknown":
-                        row.set_subtitle(f"Ubuntu Touch - System: {size}, Userdata: {userdata_size}")
+                        subtitle = f"Ubuntu Touch - System: {size}, Userdata: {userdata_size}"
                     elif size != "Unknown":
-                        row.set_subtitle(f"Ubuntu Touch - System: {size}")
+                        subtitle = f"Ubuntu Touch - System: {size}"
                     else:
-                        row.set_subtitle("Ubuntu Touch")
+                        subtitle = "Ubuntu Touch"
                 else:
                     # Normal partition display
                     size = actions.get_partition_size(partition_name)
                     if size != "Unknown":
-                        row.set_subtitle(f"Size: {size}")
+                        subtitle = f"Size: {size}"
 
                 can_remove = (partition_name != 'droidian-rootfs' and partition_name != 'furios-rootfs' and
                               not actions.is_partition_mounted(partition_name))
 
+                install_callback = None
+                delete_callback = None
+
                 if can_remove:
-                    # Create button box for install and delete buttons
-                    button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-                    button_box.set_margin_top(6)
-                    button_box.set_margin_bottom(6)
-                    button_box.set_margin_start(6)
-                    button_box.set_margin_end(6)
+                    install_callback = lambda btn, p=partition_name: None
+                    delete_callback = lambda btn, p=partition_name: self.show_delete_dialog(p)
 
-                    # Install button with popover
-                    install_button = Gtk.MenuButton()
-                    install_button.set_icon_name("document-save-symbolic")
-                    install_button.add_css_class("suggested-action")
-                    install_button.set_valign(Gtk.Align.CENTER)
-                    ctx = install_button.get_style_context()
-                    ctx.add_class("wide-button")
-                    install_button.set_size_request(42, 40)
+                row = ui.create_partition_row(display_name, subtitle, can_remove,
+                                              partition_name, is_encrypted,
+                                              install_callback, delete_callback)
 
-                    # Create and set popover
-                    popover = self.create_os_popover(partition_name)
-                    install_button.set_popover(popover)
-
-                    # Delete button
-                    delete_button = Gtk.Button()
-                    delete_button.set_icon_name("user-trash-symbolic")
-                    delete_button.add_css_class("destructive-action")
-                    delete_button.set_valign(Gtk.Align.CENTER)
-                    ctx = delete_button.get_style_context()
-                    ctx.add_class("wide-button")
-                    delete_button.set_size_request(42, 40)
-                    delete_button.connect("clicked", lambda btn, p=partition_name: self.show_delete_dialog(p))
-
-                    button_box.append(install_button)
-                    button_box.append(delete_button)
-                    row.add_suffix(button_box)
+                # Set up the install popover if needed and device is not encrypted
+                if can_remove and install_callback and not is_encrypted:
+                    install_button = ui.find_install_button_in_row(row)
+                    if install_button and hasattr(install_button, 'partition_name'):
+                        popover = self.create_os_popover(install_button.partition_name)
+                        install_button.set_popover(popover)
 
                 self.partition_list.append(row)
         except Exception as e:
             self.show_toast(f"Error reading partitions: {str(e)}")
 
+    def create_os_popover(self, partition_name):
+        """Create a popover with supported OS options."""
+        supported_os = actions.get_supported_operating_systems()
+        return ui.create_os_popover(partition_name, supported_os, self.on_install_os)
+
     def show_new_install_dialog(self, button):
         """Show dialog for creating a new partition install."""
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        content.set_margin_top(48)
-        content.set_margin_bottom(24)
-        content.set_margin_start(24)
-        content.set_margin_end(24)
-
-        name_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        name_label = Gtk.Label(label="Install Name")
-        name_label.set_width_chars(15)
-        name_entry = Gtk.Entry()
-        name_entry.set_hexpand(True)
-        name_entry.connect("insert-text", self.on_name_insert)
-        name_box.append(name_label)
-        name_box.append(name_entry)
-        content.append(name_box)
-
-        size_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        size_label = Gtk.Label(label="Install Size (GB)")
-        size_label.set_width_chars(15)
-        size_entry = Gtk.Entry()
-        size_entry.set_input_purpose(Gtk.InputPurpose.DIGITS)
-        size_entry.set_hexpand(True)
-        size_entry.connect("insert-text", self.on_size_insert)
-        size_box.append(size_label)
-        size_box.append(size_entry)
-        content.append(size_box)
-
-        expander = Adw.ExpanderRow()
-        expander.set_title("Storage Location")
-
-        def on_storage_selection_changed(button):
-            size_entry.set_sensitive(button == local_button)
-
-        local_button = Gtk.CheckButton()
-        local_button.set_label("Install to local storage")
-        local_button.set_active(True)
-        local_button.connect("toggled", on_storage_selection_changed)
-        expander.add_row(local_button)
+        # Check if device is encrypted first
+        if actions.is_encrypted():
+            self.show_encryption_warning_dialog()
+            return
 
         external_disks = actions.get_external_disks()
-        external_buttons = {}
 
-        for disk in external_disks:
-            ext_button = Gtk.CheckButton()
-            ext_button.set_label(f"Install to external storage ({disk})")
-            ext_button.set_group(local_button)
+        def on_apply():
+            name = widgets['name_entry'].get_text()
+            size = widgets['size_entry'].get_text() if widgets['local_button'].get_active() else None
+
+            # Get selected storage
+            storage_location = None
+            if not widgets['local_button'].get_active():
+                for button, disk in widgets['external_buttons'].items():
+                    if button.get_active():
+                        storage_location = disk
+                        break
+
+            self.on_new_install_apply(name, size, storage_location)
+
+        def on_cancel():
+            self.install_bottom_sheet.set_open(False)
+
+        content, widgets = ui.create_new_install_dialog_content(external_disks, on_apply, on_cancel)
+
+        # Setup validation
+        ui.setup_name_entry_validation(widgets['name_entry'])
+        ui.setup_size_entry_validation(widgets['size_entry'])
+
+        # Setup storage selection change handler
+        def on_storage_selection_changed(button):
+            widgets['size_entry'].set_sensitive(button == widgets['local_button'])
+
+        widgets['local_button'].connect("toggled", on_storage_selection_changed)
+        for ext_button in widgets['external_buttons'].keys():
             ext_button.connect("toggled", on_storage_selection_changed)
-            expander.add_row(ext_button)
-            external_buttons[ext_button] = disk
 
-        content.append(expander)
+        # Connect apply button
+        widgets['apply_button'].connect("clicked", lambda btn: on_apply())
 
-        button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        button_box.set_homogeneous(True)
-        button_box.set_margin_top(12)
-
-        cancel_button = Gtk.Button(label="Cancel")
-        cancel_button.set_hexpand(True)
-        cancel_button.set_halign(Gtk.Align.FILL)
-        cancel_button.connect("clicked", lambda _: self.install_bottom_sheet.set_open(False))
-        button_box.append(cancel_button)
-
-        def get_selected_storage():
-            if local_button.get_active():
-                return None
-            for button, disk in external_buttons.items():
-                if button.get_active():
-                    return disk
-            return None
-
-        apply_button = Gtk.Button(label="Apply")
-        apply_button.set_hexpand(True)
-        apply_button.set_halign(Gtk.Align.FILL)
-        apply_button.add_css_class("suggested-action")
-        apply_button.connect(
-            "clicked",
-            lambda x, y=name_entry, z=size_entry: self.on_new_install_apply(
-                y.get_text(),
-                z.get_text() if local_button.get_active() else None,
-                get_selected_storage()
-            )
-        )
-
-        button_box.append(apply_button)
-
-        content.append(button_box)
         self.install_bottom_sheet.set_sheet(content)
         self.install_bottom_sheet.set_open(True)
 
-    def on_size_insert(self, entry, text, length, position):
-        """
-        Validate size entry to only accept digits.
-
-        Args:
-            entry: The entry widget
-            text: Text being inserted
-            length: Length of text being inserted
-            position: Position of insertion
-
-        Returns:
-            bool: Whether to allow the insertion
-        """
-        if not text.isdigit():
-            entry.stop_emission_by_name("insert-text")
-            return True
-        return False
-
-    def on_name_insert(self, entry, text, length, position):
-        """
-        Validate name entry to only accept alphanumeric characters.
-
-        Args:
-            entry: The entry widget
-            text: Text being inserted
-            length: Length of text being inserted
-            position: Position of insertion
-        """
-        # Only allow letters and numbers
-        if not all(c.isalnum() for c in text):
-            entry.stop_emission_by_name("insert-text")
-            return True
-        return False
+    def show_encryption_warning_dialog(self):
+        """Show warning dialog when device is encrypted."""
+        dialog = ui.create_message_dialog(
+            self,
+            "Installation Unavailable",
+            "Device is encrypted, cannot proceed"
+        )
+        dialog.present()
 
     def on_new_install_apply(self, name, size, storage_location=None):
-        """
-        Handle new install application.
-        Args:
-            name (str): Name of the new installation
-            size (str): Size of the new installation
-            storage_location (str, optional): Path to external storage location. None for local install.
-        """
+        """Handle new install application."""
         if not name:
             self.show_toast("Name and size are required")
             return
 
-        # Additional validation for name
         if not all(part.isalnum() for part in name.split()):
             self.show_toast("Name can only contain letters and numbers")
             return
@@ -435,27 +260,23 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.show_queue_warning_dialog(self.create_new_partition, name, size, storage_location)
 
     def show_queue_warning_dialog(self, callback, *callback_args, **callback_kwargs):
-        """
-        Show warning dialog when there's already a queued partition.
-
-        Args:
-            callback (callable): Function to call if user confirms or if no queue exists
-            *callback_args: Positional arguments to pass to the callback
-            **callback_kwargs: Keyword arguments to pass to the callback
-        """
+        """Show warning dialog when there's already a queued partition."""
         queued = actions.get_queued_partition()
         if queued:
             operation, partition_name, display_name = queued
             op_text = "installation" if operation == "install" else "deletion"
-            dialog = Adw.MessageDialog(
-                transient_for=self,
-                heading="Operation Already Queued",
-                body=f"A partition {op_text} ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
-                modal=True
+
+            responses = [
+                ("cancel", "Cancel", None),
+                ("continue", "Continue", Adw.ResponseAppearance.SUGGESTED)
+            ]
+
+            dialog = ui.create_message_dialog(
+                self,
+                "Operation Already Queued",
+                f"A partition {op_text} ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
+                responses
             )
-            dialog.add_response("cancel", "Cancel")
-            dialog.add_response("continue", "Continue")
-            dialog.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
 
             # Store callback and args in dialog for use in response handler
             dialog.callback = callback
@@ -468,15 +289,14 @@ class BootmanWindow(Adw.ApplicationWindow):
             # No queue exists, proceed directly with the callback
             callback(*callback_args, **callback_kwargs)
 
-    def create_new_partition(self, name, size, storage_location=None):
-        """
-        Create a new partition.
+    def on_queue_warning_response(self, dialog, response):
+        """Handle queue warning dialog response."""
+        if response == "continue":
+            dialog.callback(*dialog.callback_args, **dialog.callback_kwargs)
+        dialog.close()
 
-        Args:
-            name (str): Name of the new installation
-            size (str): Size of the new installation
-            storage_location (str, optional): Path to external storage location. None for local install.
-        """
+    def create_new_partition(self, name, size, storage_location=None):
+        """Create a new partition."""
         if storage_location:
             success, message = actions.create_external_install_commands(name, storage_location)
         else:
@@ -496,70 +316,39 @@ class BootmanWindow(Adw.ApplicationWindow):
         operation, partition_name, display_name = queued
         op_text = "installation" if operation == "install" else "deletion"
 
-        dialog = Adw.MessageDialog(
-            transient_for=self,
-            heading=f"{op_text.title()} Queued",
-            body=f"The partition {op_text} has been queued successfully. You can now reboot your device for the changes to take effect.",
-            modal=True
+        dialog = ui.create_message_dialog(
+            self,
+            f"{op_text.title()} Queued",
+            f"The partition {op_text} has been queued successfully. You can now reboot your device for the changes to take effect."
         )
-
-        dialog.add_response("ok", "OK")
         dialog.present()
 
-    def on_queue_warning_response(self, dialog, response):
-        """
-        Handle queue warning dialog response.
-
-        Args:
-            dialog: The dialog widget
-            response: User's response
-            name: Name of the new installation
-            size: Size of the new installation
-        """
-        if response == "continue":
-            dialog.callback(*dialog.callback_args, **dialog.callback_kwargs)
-        dialog.close()
-
     def show_delete_dialog(self, partition_name):
-        """
-        Show confirmation dialog for deleting a partition.
-        Args:
-            partition_name (str): Name of the partition to delete
-        """
+        """Show confirmation dialog for deleting a partition."""
         self.show_queue_warning_dialog(
             self.show_delete_confirmation,
             partition_name
         )
 
     def show_delete_confirmation(self, partition_name):
-        """
-        Show final confirmation dialog for deleting a partition.
-        Args:
-            partition_name (str): Name of the partition to delete
-        """
-        dialog = Adw.MessageDialog(
-            transient_for=self,
-            heading="Confirm Deletion",
-            body=f"Do you want to remove {partition_name}?",
-            modal=True
-        )
+        """Show final confirmation dialog for deleting a partition."""
+        responses = [
+            ("cancel", "Cancel", None),
+            ("delete", "Delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        ]
 
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("delete", "Delete")
-        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog = ui.create_message_dialog(
+            self,
+            "Confirm Deletion",
+            f"Do you want to remove {partition_name}?",
+            responses
+        )
 
         dialog.connect("response", self.on_delete_response, partition_name)
         dialog.present()
 
     def on_delete_response(self, dialog, response, partition_name):
-        """
-        Handle partition deletion response.
-
-        Args:
-            dialog: The dialog widget
-            response: User's response
-            partition_name: Name of the partition to delete
-        """
+        """Handle partition deletion response."""
         if response == "delete":
             ubuntu_owner = actions.get_ubuntu_userdata_owner()
             if ubuntu_owner and ubuntu_owner == partition_name:
@@ -575,77 +364,12 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.close()
 
     def show_error_dialog(self, message):
-        """
-        Show an error dialog with a message.
-
-        Args:
-            message (str): Error message to display
-        """
-        dialog = Adw.MessageDialog(
-            transient_for=self,
-            heading="Error",
-            body=message,
-            modal=True
-        )
-
-        dialog.add_response("ok", "OK")
+        """Show an error dialog with a message."""
+        dialog = ui.create_message_dialog(self, "Error", message)
         dialog.present()
 
-    def create_os_popover(self, partition_name):
-        """
-        Create a popover with supported OS options.
-
-        Args:
-            partition_name (str): Name of the target partition
-
-        Returns:
-            Gtk.Popover: Configured popover widget
-        """
-        popover = Gtk.Popover()
-        popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        popover_box.add_css_class("menu")
-
-        title = Adw.PreferencesGroup()
-        title.set_title("Select Operating System")
-
-        # Add a row for each supported OS
-        for os_name, description, icon_name in actions.get_supported_operating_systems():
-            os_row = Adw.ActionRow()
-            os_row.set_title(os_name)
-            os_row.set_subtitle(description)
-
-            # Add OS icon
-            icon = Gtk.Image()
-            icon.set_from_icon_name(icon_name)
-            os_row.add_prefix(icon)
-
-            # Add arrow
-            arrow = Gtk.Image()
-            arrow.set_from_icon_name("go-next-symbolic")
-            os_row.add_suffix(arrow)
-
-            # Make the row clickable
-            row_click = Gtk.GestureClick.new()
-            row_click.connect("released",
-                              lambda gesture, n_press, x, y, part=partition_name, os=os_name:
-                              self.on_install_os(part, os))
-            os_row.add_controller(row_click)
-
-            title.add(os_row)
-
-        popover_box.append(title)
-        popover.set_child(popover_box)
-        return popover
-
     def on_install_os(self, partition_name, os_name):
-        """
-        Handle OS installation selection.
-
-        Args:
-            partition_name (str): Name of the partition to install to
-            os_name (str): Name of the OS to install
-        """
-
+        """Handle OS installation selection."""
         if os_name == "Ubuntu Touch":
             if actions.is_ubuntu_partition_available():
                 self.show_toast("An Ubuntu Touch installation exists already")
@@ -661,13 +385,7 @@ class BootmanWindow(Adw.ApplicationWindow):
             self.proceed_with_os_install(partition_name, os_name)
 
     def proceed_with_os_install(self, partition_name, os_name):
-        """
-        Proceed with OS installation.
-
-        Args:
-            partition_name (str): Name of the partition to install to
-            os_name (str): Name of the OS to install
-        """
+        """Proceed with OS installation."""
         url, md5_url = actions.get_os_download_info(os_name)
         if not url:
             self.show_toast(f"Download URL not found for {os_name}")
@@ -681,7 +399,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         if save_path.exists():
             if md5_url:
                 # Show verification dialog and start verification in background
-                status_dialog = self.create_status_dialog("Verifying existing file...", os_name)
+                status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying existing file...")
                 status_dialog.present()
                 verify_thread = threading.Thread(
                     target=self.verify_file_thread,
@@ -695,21 +413,6 @@ class BootmanWindow(Adw.ApplicationWindow):
         else:
             # No existing file, start download directly
             self.start_download(partition_name, os_name, url, md5_url)
-
-    def create_status_dialog(self, message, os_name):
-        """Create a simple status dialog for operations like verification."""
-        dialog = Adw.MessageDialog(
-            transient_for=self,
-            modal=True,
-            heading=f"Processing {os_name}",
-            body=message
-        )
-
-        # Add cancel button
-        dialog.add_response("cancel", "Cancel")
-        dialog.set_response_appearance("cancel", Adw.ResponseAppearance.DESTRUCTIVE)
-
-        return dialog
 
     def connect_cancel_button(self, dialog, cancel_event):
         """Connect cancel button to the cancel event."""
@@ -770,27 +473,13 @@ class BootmanWindow(Adw.ApplicationWindow):
                 GLib.idle_add(self.handle_verification_complete,
                               dialog, False, file_path, partition_name, os_name, url, md5_url)
 
-    def create_redownload_dialog(self, file_path):
-        """Create dialog asking if user wants to redownload existing file."""
-        dialog = Adw.MessageDialog(
-            transient_for=self,
-            modal=True,
-            heading="File Already Exists",
-            body=f"This file has already been downloaded. Do you want to download it again?"
-        )
-
-        dialog.add_response("use_existing", "Use Existing")
-        dialog.add_response("redownload", "Download Again")
-        dialog.set_response_appearance("redownload", Adw.ResponseAppearance.SUGGESTED)
-
-        return dialog
-
     def handle_verification_complete(self, dialog, valid, file_path, partition_name, os_name, url, md5_url):
         """Handle completion of file verification."""
         dialog.close()
 
         if valid:
-            if url:  # This was an existing file verification
+            # This was an existing file verification
+            if url:
                 # Show redownload prompt
                 self.show_redownload_prompt(partition_name, os_name, url, md5_url, file_path)
             else:  # This was a post-download verification
@@ -805,7 +494,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def show_redownload_prompt(self, partition_name, os_name, url, md5_url, save_path):
         """Show the redownload dialog."""
-        dialog = self.create_redownload_dialog(save_path)
+        dialog = ui.create_redownload_dialog(self, save_path)
         dialog.connect("response", lambda dlg, resp: self.handle_redownload_response(
             dlg, resp, partition_name, os_name, url, md5_url, save_path))
         dialog.present()
@@ -825,59 +514,22 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def start_download(self, partition_name, os_name, url, md5_url):
         """Start the download process with progress dialog."""
-        dialog = self.create_download_dialog(partition_name, os_name, url, md5_url)
-        dialog.present()
-
-    def create_download_dialog(self, partition_name, os_name, url, md5_url):
-        """
-        Create a dialog with a progress bar for downloading.
-
-        Args:
-            partition_name (str): Target partition name
-            os_name (str): Name of OS being installed
-            url (str): Download URL
-            md5_url (str): MD5sum Download URL
-
-        Returns:
-            Adw.MessageDialog: Dialog with progress bar
-        """
-        dialog = Adw.MessageDialog(
-            transient_for=self,
-            modal=True,
-            heading=f"Downloading {os_name}",
-            body=f"Downloading {os_name} for installation..."
-        )
-
-        # Store download state
+        # Create download state
         download_state = {
             'completed': False,
             'cancelled': False
         }
+
+        def on_cancel(dialog, response):
+            if not download_state['completed'] and not download_state['cancelled']:
+                download_state['cancelled'] = True
+                cancel_event.set()
+                self.show_toast("Download cancelled")
+            dialog.close()
+
+        dialog, progress_bar, status_label = ui.create_download_dialog(self, os_name, on_cancel)
         dialog.download_state = download_state
-
-        # Create content box for progress
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        content.set_margin_top(12)
-        content.set_margin_bottom(12)
-
-        # Add status label
-        status_label = Gtk.Label()
-        status_label.set_text("Starting download...")
-        status_label.set_halign(Gtk.Align.START)
-        content.append(status_label)
-
-        # Add progress bar
-        progress_bar = Gtk.ProgressBar()
-        progress_bar.set_show_text(True)
-        progress_bar.set_text("0%")
-        progress_bar.set_valign(Gtk.Align.CENTER)
-        content.append(progress_bar)
-
-        dialog.set_extra_child(content)
-
-        # Add cancel button
-        dialog.add_response("cancel", "Cancel")
-        dialog.set_response_appearance("cancel", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.present()
 
         # Start download in a separate thread
         cancel_event = threading.Event()
@@ -887,21 +539,8 @@ class BootmanWindow(Adw.ApplicationWindow):
                   partition_name, os_name, download_state)
         )
 
-        # Connect cancel button
-        dialog.connect("response", lambda dlg, resp: self.on_download_response(dlg, resp, cancel_event, download_state))
-
         download_thread.daemon = True
         download_thread.start()
-
-        return dialog
-
-    def on_download_response(self, dialog, response, cancel_event, download_state):
-        """Handle dialog response (typically cancel button)."""
-        if not download_state['completed'] and not download_state['cancelled']:
-            download_state['cancelled'] = True
-            cancel_event.set()
-            self.show_toast("Download cancelled")
-        dialog.close()
 
     def download_os_image(self, url, md5_url, progress_bar, status_label, dialog,
                           cancel_event, partition_name, os_name, download_state):
@@ -975,47 +614,9 @@ class BootmanWindow(Adw.ApplicationWindow):
         status_label.set_text(f"Downloaded: {downloaded_mb:.1f} MB / {total_mb:.1f} MB")
         return False
 
-    def setup_progress_dialog(self, title) -> tuple[Adw.Dialog, Gtk.Label, Gtk.TextView, Gtk.Button]:
-        dialog = Adw.Dialog(title=title, can_close=False)
-        dialog.set_content_width(self.get_width())
-        dialog.set_content_height(self.get_height())
-
-        content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        content_box.set_margin_top(24)
-        content_box.set_margin_bottom(24)
-        content_box.set_margin_start(24)
-        content_box.set_margin_end(24)
-        dialog.set_child(content_box)
-
-        title_label = Gtk.Label(label=title)
-        title_label.set_halign(Gtk.Align.CENTER)
-        title_label.set_margin_bottom(12)
-        title_label.get_style_context().add_class('heading')
-        content_box.append(title_label)
-
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_vexpand(True)
-        scrolled.get_style_context().add_class('view')
-        content_box.append(scrolled)
-
-        terminal = Gtk.TextView()
-        terminal.set_editable(False)
-        terminal.set_monospace(True)
-        scrolled.set_child(terminal)
-
-        close_button = Gtk.Button(label='Close')
-        close_button.connect('clicked', lambda _: dialog.force_close())
-        close_button.set_halign(Gtk.Align.CENTER)
-        close_button.add_css_class('suggested-action')
-        close_button.set_margin_top(12)
-        close_button.set_sensitive(False)
-        content_box.append(close_button)
-
-        return dialog, title_label, terminal, close_button
-
     def install_with_progress(self, partition_name, os_name, save_path):
         """Start installation with progress dialog."""
-        dialog, title_label, terminal, close_button = self.setup_progress_dialog(f"Installing {os_name}...")
+        dialog, title_label, terminal, close_button = ui.create_progress_dialog(self, f"Installing {os_name}...")
         dialog.present()
 
         buff = terminal.get_buffer()
@@ -1068,7 +669,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         if md5_url:
             # Show verification dialog and start verification in background
-            status_dialog = self.create_status_dialog("Verifying downloaded file...", os_name)
+            status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying downloaded file...")
             status_dialog.present()
 
             verify_thread = threading.Thread(
@@ -1086,7 +687,7 @@ class BootmanWindow(Adw.ApplicationWindow):
     def handle_verification_cancel(self, dialog, response, cancel_event):
         """Handle cancel button click during verification."""
         if response == "cancel":
-            dialog.close()  # Close dialog immediately
+            dialog.close()
             cancel_event.set()
 
     def handle_verification_cancelled(self, dialog):

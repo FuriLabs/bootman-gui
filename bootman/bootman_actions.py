@@ -36,6 +36,21 @@ def run_helper(*args):
         except Exception as e:
             return False, f"Error executing command: {str(e)}"
 
+def is_encrypted():
+    """
+    Check if the device is encrypted by looking for encrypted mapper devices.
+
+    Returns:
+        bool: True if device is encrypted, False otherwise
+    """
+    try:
+        droidian_encrypted = Path("/dev/mapper/droidian_encrypted")
+        furios_encrypted = Path("/dev/mapper/furios_encrypted")
+
+        return droidian_encrypted.exists() or furios_encrypted.exists()
+    except Exception:
+        return False
+
 def mount_partition():
     """Mount the FuriOS persist partition."""
     return run_helper("mount")
