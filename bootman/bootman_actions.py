@@ -124,7 +124,7 @@ def create_install_commands(name, size):
         f"resize2fs /dev/{lvm_type}/{lvm_type}-rootfs {new_size_mb}M",
         f"lvm lvreduce -L -{size_mb}M -r /dev/{lvm_type}/{lvm_type}-rootfs",
         f"lvm lvcreate -L {size_mb}M -n {partition_name} {lvm_type} -y",
-        f"mke2fs /dev/{lvm_type}/{partition_name}",
+        f"mke2fs -b 4096 /dev/{lvm_type}/{partition_name}",
         f"e2fsck -fy /dev/{lvm_type}/{partition_name}"
     ]
 
@@ -148,7 +148,7 @@ def create_external_install_commands(name, storage_location):
        tuple: (success (bool), message (str))
    """
    commands = [
-       f"mke2fs {storage_location}"
+       f"mke2fs -b 4096 {storage_location}"
    ]
 
    success, _ = run_helper("write_commands", "\n".join(commands))
@@ -566,7 +566,7 @@ def create_ubuntu_userdata_commands(partition_name):
         f"resize2fs /dev/{lvm_type}/{partition_name} {target_size_mb}M",
         f"lvm lvreduce -L {target_size_mb}M -r /dev/{lvm_type}/{partition_name}",
         f"lvm lvcreate -L {remaining_size_mb}M -n ubuntu-userdata {lvm_type} -y",
-        f"mke2fs /dev/{lvm_type}/ubuntu-userdata",
+        f"mke2fs -b 4096 /dev/{lvm_type}/ubuntu-userdata",
         f"e2fsck -fy /dev/{lvm_type}/ubuntu-userdata"
     ]
 
