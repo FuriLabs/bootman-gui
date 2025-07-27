@@ -23,6 +23,8 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.setup_ui()
         self.present()
 
+        self.cache_dir = Path.home() / ".cache" / "bootman"
+
         # Delayed check for mount and partitions
         GLib.timeout_add(100, self.delayed_check_mount_and_partitions)
 
@@ -49,12 +51,15 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def show_toast(self, message, duration=3):
         """Display a toast message."""
+        print(message)
+
         toast = Adw.Toast(title=message)
         self.toast_overlay.add_toast(toast)
-        print(message)
+
         def dismiss_toast():
             toast.dismiss()
             return False
+
         GLib.timeout_add_seconds(duration, dismiss_toast)
 
     def delayed_check_mount_and_partitions(self):
@@ -117,7 +122,11 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         try:
             ubuntu_userdata_owner = actions.get_ubuntu_userdata_owner()
-            skip_partitions = ["ubuntu-userdata"] if ubuntu_userdata_owner else []
+
+            skip_partitions = []
+            if ubuntu_userdata_owner:
+                skip_partitions = ["ubuntu-userdata"]
+
             partitions = actions.read_partitions_file(partitions_file)
             is_encrypted = actions.is_encrypted()
 
@@ -388,12 +397,11 @@ class BootmanWindow(Adw.ApplicationWindow):
         """Proceed with OS installation."""
         url, md5_url = actions.get_os_download_info(os_name)
         if not url:
-            self.show_toast(f"Download URL not found for {os_name}")
+            self.show_toast(f"This device does not have a version of {os_name} available")
             return
 
-        cache_dir = Path.home() / ".cache" / "bootman"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        save_path = cache_dir / f"{os_name.lower()}.img"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        save_path = self.cache_dir / f"{os_name.lower()}.img"
 
         # First check for existing file and verify if needed
         if save_path.exists():
@@ -546,8 +554,7 @@ class BootmanWindow(Adw.ApplicationWindow):
                           cancel_event, partition_name, os_name, download_state):
         """Download OS image with progress updates and MD5 verification if available."""
         try:
-            cache_dir = Path.home() / ".cache" / "bootman"
-            save_path = cache_dir / f"{os_name.lower()}.img"
+            save_path = self.cache_dir / f"{os_name.lower()}.img"
 
             # Download new file
             response = urllib.request.urlopen(url)
