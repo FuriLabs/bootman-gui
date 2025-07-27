@@ -64,7 +64,7 @@ def create_partition_row(display_name: str, subtitle: str = None, can_remove: bo
             install_button.set_valign(Gtk.Align.CENTER)
             ctx = install_button.get_style_context()
             ctx.add_class("wide-button")
-            install_button.set_size_request(42, 40)
+            install_button.set_size_request(36, 34)
 
             # Disable button if device is encrypted
             if is_encrypted:
@@ -87,7 +87,7 @@ def create_partition_row(display_name: str, subtitle: str = None, can_remove: bo
             delete_button.connect("clicked", delete_callback)
             ctx = delete_button.get_style_context()
             ctx.add_class("wide-button")
-            delete_button.set_size_request(42, 40)
+            delete_button.set_size_request(36, 34)
             button_box.append(delete_button)
 
         row.add_suffix(button_box)
