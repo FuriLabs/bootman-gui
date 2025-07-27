@@ -19,11 +19,11 @@ class BootmanWindow(Adw.ApplicationWindow):
         self.connect("close-request", lambda _: exit(0))
         self.set_default_size(400, 600)
 
+        self.cache_dir = Path.home() / ".cache" / "bootman"
+
         # Initialize UI components
         self.setup_ui()
         self.present()
-
-        self.cache_dir = Path.home() / ".cache" / "bootman"
 
         # Delayed check for mount and partitions
         GLib.timeout_add(100, self.delayed_check_mount_and_partitions)
@@ -160,28 +160,39 @@ class BootmanWindow(Adw.ApplicationWindow):
                 delete_callback = None
 
                 if can_remove:
-                    install_callback = lambda btn, p=partition_name: None
+                    install_callback = lambda p=partition_name: self.show_os_selection_bottom_sheet(p)
                     delete_callback = lambda btn, p=partition_name: self.show_delete_dialog(p)
 
                 row = ui.create_partition_row(display_name, subtitle, can_remove,
                                               partition_name, is_encrypted,
                                               install_callback, delete_callback)
 
-                # Set up the install popover if needed and device is not encrypted
-                if can_remove and install_callback and not is_encrypted:
-                    install_button = ui.find_install_button_in_row(row)
-                    if install_button and hasattr(install_button, 'partition_name'):
-                        popover = self.create_os_popover(install_button.partition_name)
-                        install_button.set_popover(popover)
-
                 self.partition_list.append(row)
         except Exception as e:
             self.show_toast(f"Error reading partitions: {str(e)}")
 
-    def create_os_popover(self, partition_name):
-        """Create a popover with supported OS options."""
-        supported_os = actions.get_supported_operating_systems()
-        return ui.create_os_popover(partition_name, supported_os, self.on_install_os)
+    def show_os_selection_bottom_sheet(self, partition_name):
+        """Show the OS selection bottom sheet."""
+        if actions.is_encrypted():
+            self.show_encryption_warning_dialog()
+            return
+
+        try:
+            supported_os = actions.get_supported_operating_systems()
+
+            def on_os_selected(part_name, os_name):
+                # Close the bottom sheet first
+                self.install_bottom_sheet.set_open(False)
+                # Then proceed with installation
+                self.on_install_os(part_name, os_name)
+
+            content = ui.create_os_selection_bottom_sheet(partition_name, supported_os, on_os_selected)
+
+            # Use the existing install_bottom_sheet for OS selection too
+            self.install_bottom_sheet.set_sheet(content)
+            self.install_bottom_sheet.set_open(True)
+        except Exception as e:
+            self.show_toast(f"Error showing OS selection: {str(e)}")
 
     def show_new_install_dialog(self, button):
         """Show dialog for creating a new partition install."""
@@ -379,48 +390,54 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def on_install_os(self, partition_name, os_name):
         """Handle OS installation selection."""
-        if os_name == "Ubuntu Touch":
-            if actions.is_ubuntu_partition_available():
-                self.show_toast("An Ubuntu Touch installation exists already")
-                return
+        try:
+            if os_name == "Ubuntu Touch":
+                if actions.is_ubuntu_partition_available():
+                    self.show_toast("An Ubuntu Touch installation exists already")
+                    return
 
-            self.show_queue_warning_dialog(
-                self.proceed_with_os_install,
-                partition_name,
-                os_name
-            )
-        else:
-            # Proceed with normal installation flow
-            self.proceed_with_os_install(partition_name, os_name)
+                self.show_queue_warning_dialog(
+                    self.proceed_with_os_install,
+                    partition_name,
+                    os_name
+                )
+            else:
+                # Proceed with normal installation flow
+                self.proceed_with_os_install(partition_name, os_name)
+        except Exception as e:
+            self.show_toast(f"Error during OS installation: {str(e)}")
 
     def proceed_with_os_install(self, partition_name, os_name):
         """Proceed with OS installation."""
-        url, md5_url = actions.get_os_download_info(os_name)
-        if not url:
-            self.show_toast(f"This device does not have a version of {os_name} available")
-            return
+        try:
+            url, md5_url = actions.get_os_download_info(os_name)
+            if not url:
+                self.show_toast(f"This device does not have a version of {os_name} available")
+                return
 
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        save_path = self.cache_dir / f"{os_name.lower()}.img"
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            save_path = self.cache_dir / f"{os_name.lower()}.img"
 
-        # First check for existing file and verify if needed
-        if save_path.exists():
-            if md5_url:
-                # Show verification dialog and start verification in background
-                status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying existing file...")
-                status_dialog.present()
-                verify_thread = threading.Thread(
-                    target=self.verify_file_thread,
-                    args=(save_path, md5_url, status_dialog, partition_name, os_name, url)
-                )
-                verify_thread.daemon = True
-                verify_thread.start()
+            # First check for existing file and verify if needed
+            if save_path.exists():
+                if md5_url:
+                    # Show verification dialog and start verification in background
+                    status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying existing file...")
+                    status_dialog.present()
+                    verify_thread = threading.Thread(
+                        target=self.verify_file_thread,
+                        args=(save_path, md5_url, status_dialog, partition_name, os_name, url)
+                    )
+                    verify_thread.daemon = True
+                    verify_thread.start()
+                else:
+                    # No MD5 to verify, show redownload dialog directly
+                    self.show_redownload_prompt(partition_name, os_name, url, md5_url, save_path)
             else:
-                # No MD5 to verify, show redownload dialog directly
-                self.show_redownload_prompt(partition_name, os_name, url, md5_url, save_path)
-        else:
-            # No existing file, start download directly
-            self.start_download(partition_name, os_name, url, md5_url)
+                # No existing file, start download directly
+                self.start_download(partition_name, os_name, url, md5_url)
+        except Exception as e:
+            self.show_toast(f"Error proceeding with OS install: {str(e)}")
 
     def connect_cancel_button(self, dialog, cancel_event):
         """Connect cancel button to the cancel event."""

@@ -57,8 +57,8 @@ def create_partition_row(display_name: str, subtitle: str = None, can_remove: bo
         button_box.set_margin_end(6)
 
         if install_callback:
-            # Install button with popover
-            install_button = Gtk.MenuButton()
+            # Install button (now regular button instead of MenuButton)
+            install_button = Gtk.Button()
             install_button.set_icon_name("document-save-symbolic")
             install_button.add_css_class("suggested-action")
             install_button.set_valign(Gtk.Align.CENTER)
@@ -70,8 +70,10 @@ def create_partition_row(display_name: str, subtitle: str = None, can_remove: bo
             if is_encrypted:
                 install_button.set_sensitive(False)
                 install_button.set_tooltip_text("Device is encrypted - installation unavailable")
+            else:
+                install_button.connect("clicked", lambda btn: install_callback(partition_name))
 
-            # Store partition name for later popover setup
+            # Store partition name for later use
             install_button.partition_name = partition_name
 
             button_box.append(install_button)
@@ -121,15 +123,27 @@ def create_queued_partition_row(display_name: str, operation: str,
 
     return row
 
-def create_os_popover(partition_name: str, supported_os_list: List[Tuple[str, str, str]],
-                      install_callback: Callable) -> Gtk.Popover:
-    """Create a popover with supported OS options."""
-    popover = Gtk.Popover()
-    popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-    popover_box.add_css_class("menu")
+def create_os_selection_bottom_sheet(partition_name: str, supported_os_list: List[Tuple[str, str, str]],
+                                     install_callback: Callable) -> Gtk.Box:
+    """Create a bottom sheet with supported OS options."""
+    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+    content.set_margin_top(36)
+    content.set_margin_bottom(24)
+    content.set_margin_start(24)
+    content.set_margin_end(24)
 
-    title = Adw.PreferencesGroup()
-    title.set_title("Select Operating System")
+    # Title
+    title_label = Gtk.Label(label="Select Operating System")
+    title_label.set_halign(Gtk.Align.START)
+    title_label.set_margin_bottom(12)
+    attr_list = Pango.AttrList()
+    attr_list.insert(Pango.attr_weight_new(Pango.Weight.BOLD))
+    attr_list.insert(Pango.attr_scale_new(1.2))
+    title_label.set_attributes(attr_list)
+    content.append(title_label)
+
+    # OS list in a preferences group
+    os_group = Adw.PreferencesGroup()
 
     # Add a row for each supported OS
     for os_name, description, icon_name in supported_os_list:
@@ -149,16 +163,14 @@ def create_os_popover(partition_name: str, supported_os_list: List[Tuple[str, st
 
         # Make the row clickable
         row_click = Gtk.GestureClick.new()
-        row_click.connect("released",
-                          lambda gesture, n_press, x, y, part=partition_name, os=os_name:
-                          install_callback(part, os))
+        row_click.connect("released", lambda gesture, n_press, x, y, part=partition_name, os=os_name: install_callback(part, os))
         os_row.add_controller(row_click)
 
-        title.add(os_row)
+        os_group.add(os_row)
 
-    popover_box.append(title)
-    popover.set_child(popover_box)
-    return popover
+    content.append(os_group)
+
+    return content
 
 def create_new_install_dialog_content(external_disks: List[str],
                                       apply_callback: Callable,
@@ -409,18 +421,18 @@ def create_progress_dialog(parent, title: str) -> Tuple[Adw.Dialog, Gtk.Label, G
 
     return dialog, title_label, terminal, close_button
 
-def find_install_button_in_row(row: Adw.ActionRow) -> Optional[Gtk.MenuButton]:
+def find_install_button_in_row(row: Adw.ActionRow) -> Optional[Gtk.Button]:
     """
-    Find the install button (MenuButton) in a partition row.
+    Find the install button (Button) in a partition row.
 
     Args:
         row: The ActionRow to search in
 
     Returns:
-        The MenuButton if found, None otherwise
+        The Button if found, None otherwise
     """
     def search_widget(widget):
-        if isinstance(widget, Gtk.MenuButton):
+        if isinstance(widget, Gtk.Button):
             # Check if this is the install button by looking for the save icon
             if widget.get_icon_name() == "document-save-symbolic":
                 return widget
