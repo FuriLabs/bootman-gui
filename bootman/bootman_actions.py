@@ -303,7 +303,7 @@ def get_queued_partition():
         # If no wip file but commands exist, check for deletion
         for line in commands_content.split('\n'):
             if 'lvremove' in line:
-                # Extract partition name from command like "lvm lvremove -f /dev/droidian/partition-name"
+                # Extract partition name from command like "lvm lvremove -f /dev/{lvm_type}/partition-name"
                 partition_name = line.split('/')[-1].strip()
                 display_name = partition_name.replace('-', ' ')
                 return ('delete', partition_name, display_name)
@@ -482,7 +482,8 @@ def get_external_disks():
     return valid_partitions
 
 def is_ubuntu_partition_available():
-    if os.path.exists("/dev/droidian/ubuntu-userdata"):
+    lvm_type = get_lvm_type()
+    if os.path.exists(f"/dev/{lvm_type}/ubuntu-userdata"):
         return True
     return False
 
