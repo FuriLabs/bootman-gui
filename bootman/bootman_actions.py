@@ -64,6 +64,17 @@ def get_lvm_type():
     else:
         return ""
 
+def get_codename():
+    """Reads the device codename from /usr/lib/furios/device/codename"""
+    try:
+        with open('/usr/lib/furios/device/codename', 'r') as file:
+            content = file.read().strip()
+            return content
+    except FileNotFoundError:
+        return ""
+    except Exception:
+        return ""
+
 def get_partition_size(partition_name):
     """Get the size of a specific LVM partition."""
     lvm_type = get_lvm_type()
@@ -83,7 +94,7 @@ def get_partition_size(partition_name):
     return "Unknown"
 
 def write_partitions_file(partitions):
-    """Write partitions to //var/lib/furios-persist/bootman/partitions file."""
+    """Write partitions to /var/lib/furios-persist/bootman/partitions file."""
     content = ''
     for partition in partitions:
         display_name = process_partition_name(partition)
@@ -344,14 +355,18 @@ def get_os_download_info(os_name):
         url is the OS image URL
         md5_url is the MD5 checksum URL (can be None if no MD5 verification needed)
     """
+    codename = get_codename()
+    if not codename:
+        return None, None
+
     os_map = {
         "FuriOS": {
-            "url": "https://filedump.furios.io/rootfs/rootfs.img",
-            "md5_url": "https://filedump.furios.io/rootfs/rootfs.img.md5"
+            "url": f"https://filedump.furios.io/rootfs/rootfs-{codename}.img",
+            "md5_url": f"https://filedump.furios.io/rootfs/rootfs-{codename}.img.md5"
         },
         "Ubuntu Touch": {
-            "url": "https://filedump.furios.io/rootfs/rootfs-ubports.img",
-            "md5_url": "https://filedump.furios.io/rootfs/rootfs-ubports.img.md5"
+            "url": f"https://filedump.furios.io/rootfs/rootfs-ubports-{codename}.img",
+            "md5_url": f"https://filedump.furios.io/rootfs/rootfs-ubports-{codename}.img.md5"
         }
     }
 
