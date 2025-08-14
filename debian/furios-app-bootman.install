@@ -1,6 +1,0 @@
-bootman usr/lib/bootman
-main.py /usr/lib/bootman
-data/io.FuriOS.Bootman.desktop /usr/share/applications
-data/io.FuriOS.Bootman.svg /usr/share/icons/hicolor/scalable/apps
-data/io.furios.bootman.policy /usr/share/polkit-1/actions/
-scripts/bootman-helper /usr/libexec/
