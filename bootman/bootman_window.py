@@ -671,9 +671,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         """Handle installation completion."""
         if success:
             if os_name == "Ubuntu Touch":
-                success, message = actions.create_ubuntu_userdata_commands(partition_name)
-                if not success:
-                    self.show_toast(message)
+                self.start_userdata_split_immediate(partition_name)
 
             title_label.set_text(f"Successfully installed {os_name}!")
             self.show_toast(f"Successfully installed {os_name}")
@@ -683,6 +681,46 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         close_button.set_sensitive(True)
         return False
+
+    def start_userdata_split_immediate(self, partition_name):
+        """Run the Ubuntu Touch userdata split immediately with progress output."""
+        dialog, title_label, terminal, close_button = ui.create_progress_dialog(self, "Preparing Ubuntu userdata…")
+        dialog.present()
+
+        buff = terminal.get_buffer()
+
+        def append_output(line):
+            GLib.idle_add(
+                lambda: buff.insert_at_cursor(line) or
+                terminal.scroll_to_mark(buff.get_insert(), 0.0, False, 0.0, 1.0)
+            )
+
+        def worker():
+            try:
+                success, message = actions.create_ubuntu_userdata_commands(
+                    partition_name,
+                    output_callback=append_output
+                )
+                def finish():
+                    if success:
+                        title_label.set_text("Ubuntu userdata created!")
+                        self.show_toast("Ubuntu userdata created")
+                        # Refresh lists to show new LV and merged subtitle
+                        self.process_partitions()
+                    else:
+                        title_label.set_text("Ubuntu userdata failed!")
+                        self.show_error_dialog(message)
+                    close_button.set_sensitive(True)
+                GLib.idle_add(finish)
+            except Exception as e:
+                GLib.idle_add(lambda: (
+                    title_label.set_text("Ubuntu userdata failed!"),
+                    self.show_error_dialog(str(e)),
+                    close_button.set_sensitive(True)
+                ))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
 
     def download_complete(self, dialog, save_path, partition_name, os_name):
         """Handle download completion."""

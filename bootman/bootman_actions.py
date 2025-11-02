@@ -502,12 +502,13 @@ def is_ubuntu_partition_available():
         return True
     return False
 
-def create_ubuntu_userdata_commands(partition_name):
+def create_ubuntu_userdata_commands(partition_name, output_callback = None):
     """
     Reduce a given partition to 4GB and create a new ubuntu-userdata partition
     with the remaining space.
     Args:
         partition_name: Name of the partition to resize
+        output_callback (callable): Optional line-callback
     Returns:
         tuple: (success, message)
     """
@@ -578,23 +579,53 @@ def create_ubuntu_userdata_commands(partition_name):
             pass
     # Write the command file
     commands = [
+        "set -e",  # Exit on any error
+        "set -x",  # Echo commands as they are executed
+        "",
+        f"umount -l /dev/{lvm_type}/{partition_name} || true",
+        f"umount -l /dev/{lvm_type}/ubuntu-userdata || true",
         f"e2fsck -fy /dev/{lvm_type}/{partition_name}",
         f"resize2fs /dev/{lvm_type}/{partition_name} {target_size_mb}M",
-        f"lvm lvreduce -L {target_size_mb}M -r /dev/{lvm_type}/{partition_name}",
+        f"lvm lvreduce -L {target_size_mb}M -r /dev/{lvm_type}/{partition_name} -y",
         f"lvm lvcreate -L {remaining_size_mb}M -n ubuntu-userdata {lvm_type} -y",
         f"mke2fs -b 4096 /dev/{lvm_type}/ubuntu-userdata",
         f"e2fsck -fy /dev/{lvm_type}/ubuntu-userdata"
     ]
 
-    success, _ = run_helper("write_commands", "\n".join(commands))
-    if not success:
-        return False, "Failed to write commands"
+    # Build a temporary script and run with pkexec, streaming output
+    script_path = Path("/tmp/bootman_userdata_split.sh")
+    try:
+        script_lines = ["#!/bin/bash"] + commands
+        script_path.write_text("\n".join(script_lines))
+        script_path.chmod(0o700)
 
-    # Write the wip file
-    success, _ = run_helper("write_wip", "ubuntu-userdata:Ubuntu Userdata")
-    if not success:
-        return False, "Failed to write wip file"
-    return True, "Ubuntu UserData partition creation queued successfully"
+        process = subprocess.Popen(
+            ["pkexec", "/bin/bash", str(script_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+
+        while True:
+            line = process.stdout.readline()
+            if not line and process.poll() is not None:
+                break
+            if line and output_callback:
+                output_callback(line)
+
+        rc = process.wait()
+        if rc != 0:
+            return False, f"Ubuntu userdata creation failed with code {rc}"
+        return True, "Ubuntu UserData partition created successfully"
+    except Exception as e:
+        return False, f"Immediate userdata creation error: {str(e)}"
+    finally:
+        try:
+            script_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 def create_delete_ubuntu_commands(partition_name):
     """Create commands for deleting an Ubuntu partition and its userdata partition."""
