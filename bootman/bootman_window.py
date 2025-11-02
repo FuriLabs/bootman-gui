@@ -674,7 +674,9 @@ class BootmanWindow(Adw.ApplicationWindow):
                 success, message = actions.create_ubuntu_userdata_commands(partition_name)
                 if not success:
                     self.show_toast(message)
-
+                else:
+                    self.process_partitions()
+                    self.show_reboot_dialog()
             title_label.set_text(f"Successfully installed {os_name}!")
             self.show_toast(f"Successfully installed {os_name}")
         else:
