@@ -217,7 +217,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
             self.on_new_install_apply(name, size, storage_location)
 
-        def on_cancel():
+        def on_cancel(button):
             self.install_bottom_sheet.set_open(False)
 
         content, widgets = ui.create_new_install_dialog_content(external_disks, on_apply, on_cancel)
