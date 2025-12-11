@@ -7,7 +7,7 @@ from pathlib import Path
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, Pango
+from gi.repository import Gtk, Adw, Pango, GLib
 
 def create_header_bar(add_callback: Callable = None) -> Adw.HeaderBar:
     """Create the main header bar with title and add button."""
@@ -46,7 +46,8 @@ def create_partition_row(display_name: str, subtitle: str = None, can_remove: bo
     row = Adw.ActionRow(title=display_name)
 
     if subtitle:
-        row.set_subtitle(subtitle)
+        safe_subtitle = GLib.markup_escape_text(subtitle)
+        row.set_subtitle(safe_subtitle)
 
     if can_remove and (install_callback or delete_callback):
         # Create button box for install and delete buttons
