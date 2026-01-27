@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0
 # Copyright (C) 2025 Bardia Moshiri <bardia@furilabs.com>
 
-import subprocess
-from pathlib import Path
-import threading
-import tempfile
+import json
 import os
+import subprocess
+import tempfile
+import threading
+import urllib.request
+from pathlib import Path
 
 _command_lock = threading.Lock()
 HELPER_PATH = "/usr/libexec/bootman-helper"
@@ -359,14 +361,29 @@ def get_os_download_info(os_name):
     if not codename:
         return None, None
 
+    try:
+        # Get ubuntu touch latest image URL from jenkins
+        ut_jenkins_latest = urllib.request.urlopen('https://jenkins.furios.io/job/ubuntu%20touch%20krypton/lastSuccessfulBuild/api/json')
+        ut_data = ut_jenkins_latest.read().decode('utf-8')
+
+        ut_json = json.loads(ut_data)
+        ut_latest_rev = ut_json['number']
+
+        ut_url = f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/ws/ubports-{codename}-{ut_latest_rev}.img"
+        ut_md5_url = None
+    except Exception:
+        print("Failed to get latest revision from Jenkins, falling back to static URL")
+        ut_url = f"https://filedump.furios.io/rootfs/rootfs-ubports-{codename}.img"
+        ut_md5_url = f"https://filedump.furios.io/rootfs/rootfs-ubports-{codename}.img.md5"
+
     os_map = {
         "FuriOS": {
             "url": f"https://filedump.furios.io/rootfs/rootfs-{codename}.img",
             "md5_url": f"https://filedump.furios.io/rootfs/rootfs-{codename}.img.md5"
         },
         "Ubuntu Touch": {
-            "url": f"https://filedump.furios.io/rootfs/rootfs-ubports-{codename}.img",
-            "md5_url": f"https://filedump.furios.io/rootfs/rootfs-ubports-{codename}.img.md5"
+            "url": ut_url,
+            "md5_url": ut_md5_url
         }
     }
 
