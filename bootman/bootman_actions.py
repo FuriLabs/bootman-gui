@@ -86,9 +86,9 @@ def get_partition_size(partition_name):
         if success:
             for line in output.splitlines():
                 if "LV Size" in line:
-                    size = line.split()[2].replace(",", ".")
+                    size_str = line.split()[2].replace(',', '.').replace('<', '')
                     unit = line.split()[3]
-                    return f"{size}{unit}"
+                    return f"{size_str}{unit}"
     elif os.path.exists(partition_name):
         success, output = run_helper("blockdev", partition_name)
         if success:
@@ -120,7 +120,7 @@ def create_install_commands(name, size):
     current_size = None
     for line in output.splitlines():
         if "LV Size" in line:
-            size_str = line.split()[2].replace(',', '.')
+            size_str = line.split()[2].replace(',', '.').replace('<', '')
             current_size = float(size_str)
             break
     if current_size is None:
@@ -187,7 +187,7 @@ def create_delete_commands(partition_name):
         size = None
         for line in output.splitlines():
             if "LV Size" in line:
-                size_str = line.split()[2].replace(",", ".")
+                size_str = line.split()[2].replace(',', '.').replace('<', '')
                 size = float(size_str)
                 unit = line.split()[3]
                 if unit.lower() == 'gib':
@@ -542,7 +542,7 @@ def create_ubuntu_userdata_commands(partition_name, output_callback = None):
     current_size = None
     for line in output.splitlines():
         if "LV Size" in line:
-            size_str = line.split()[2].replace(',', '.')
+            size_str = line.split()[2].replace(',', '.').replace('<', '')
             current_size = float(size_str)
             break
 
@@ -667,7 +667,7 @@ def create_delete_ubuntu_commands(partition_name):
     main_size = None
     for line in output.splitlines():
         if "LV Size" in line:
-            size_str = line.split()[2].replace(",", ".")
+            size_str = line.split()[2].replace(',', '.').replace('<', '')
             main_size = float(size_str)
             unit = line.split()[3]
             if unit.lower() == 'gib':
@@ -685,7 +685,7 @@ def create_delete_ubuntu_commands(partition_name):
     userdata_size = None
     for line in output.splitlines():
         if "LV Size" in line:
-            size_str = line.split()[2].replace(",", ".")
+            size_str = line.split()[2].replace(',', '.').replace('<', '')
             userdata_size = float(size_str)
             unit = line.split()[3]
             if unit.lower() == 'gib':
