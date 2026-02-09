@@ -363,7 +363,7 @@ def get_os_download_info(os_name):
 
     try:
         # Get ubuntu touch latest image URL from jenkins
-        ut_jenkins_latest = urllib.request.urlopen('https://jenkins.furios.io/job/ubuntu%20touch%20krypton/lastSuccessfulBuild/api/json')
+        ut_jenkins_latest = urllib.request.urlopen(f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/lastSuccessfulBuild/api/json")
         ut_data = ut_jenkins_latest.read().decode('utf-8')
 
         ut_json = json.loads(ut_data)
