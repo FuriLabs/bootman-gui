@@ -411,9 +411,6 @@ class BootmanWindow(Adw.ApplicationWindow):
         """Proceed with OS installation."""
         try:
             url, md5_url = actions.get_os_download_info(os_name)
-            if not url:
-                self.show_toast(f"This device does not have a version of {os_name} available")
-                return
 
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             save_path = self.cache_dir / f"{os_name.lower()}.img"
@@ -541,6 +538,10 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def start_download(self, partition_name, os_name, url, md5_url):
         """Start the download process with progress dialog."""
+        if not url:
+            self.show_toast(f"This device does not have a version of {os_name} available")
+            return
+
         # Create download state
         download_state = {
             'completed': False,
