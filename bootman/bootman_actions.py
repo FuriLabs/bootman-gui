@@ -227,7 +227,7 @@ def create_delete_commands(partition_name):
         return True, "Deletion queued successfully"
     elif os.path.exists(partition_name):
         remove_partition_entry(partition_name)
-        return True, f"Successfully deleted external storage install"
+        return True, "Successfully deleted external storage install"
     return False, "Partition is not available"
 
 def remove_partition_entry(partition_name):
@@ -424,7 +424,7 @@ def run_install_commands(partition_name, save_path, output_callback=None):
             "mkdir -p /mnt_newpart",
             "mkdir -p /mnt_rootfs",
             "",
-            f"# Mount partitions",
+            "# Mount partitions",
             f"umount -l {partition_path} || true",
             f"mkfs.ext4 -F {partition_path}",
             f"mount {partition_path} /mnt_newpart",
@@ -655,10 +655,6 @@ def create_delete_ubuntu_commands(partition_name):
     if not os.path.exists(f"/dev/{lvm_type}/{partition_name}"):
         return False, "Ubuntu partition is not available"
 
-    # Check if the ubuntu-userdata partition exists
-    if not os.path.exists(f"/dev/{lvm_type}/ubuntu-userdata"):
-        return False, "Ubuntu userdata partition is not available"
-
     # Get main partition size
     success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/{partition_name}")
     if not success:
@@ -679,24 +675,22 @@ def create_delete_ubuntu_commands(partition_name):
 
     # Get userdata partition size
     success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/ubuntu-userdata")
-    if not success:
-        return False, "Failed to get userdata partition size"
-
     userdata_size = None
-    for line in output.splitlines():
-        if "LV Size" in line:
-            size_str = line.split()[2].replace(',', '.').replace('<', '')
-            userdata_size = float(size_str)
-            unit = line.split()[3]
-            if unit.lower() == 'gib':
-                userdata_size = userdata_size * 1024
-            break
+    if success:
+        for line in output.splitlines():
+            if "LV Size" in line:
+                size_str = line.split()[2].replace(',', '.').replace('<', '')
+                userdata_size = float(size_str)
+                unit = line.split()[3]
+                if unit.lower() == 'gib':
+                    userdata_size = userdata_size * 1024
+                break
 
-    if userdata_size is None:
-        return False, "Could not determine userdata partition size"
+        if userdata_size is None:
+            return False, "Could not determine userdata partition size"
 
     # Total size to reclaim
-    total_size = int(main_size) + int(userdata_size)
+    total_size = int(main_size) + int(userdata_size or 0)
 
     # Remove WIP
     success, output = run_helper("remove_wip")
@@ -707,7 +701,7 @@ def create_delete_ubuntu_commands(partition_name):
     commands = [
         # Remove both partitions
         f"lvm lvremove -f /dev/{lvm_type}/{partition_name}",
-        f"lvm lvremove -f /dev/{lvm_type}/ubuntu-userdata",
+        f"lvm lvremove -f /dev/{lvm_type}/ubuntu-userdata" if userdata_size else "echo 'No userdata partition to remove'",
         # Extend the root filesystem with the total reclaimed space
         f"lvm lvextend -L +{total_size}M /dev/{lvm_type}/{lvm_type}-rootfs",
         # Check and resize the root filesystem
@@ -731,7 +725,8 @@ def create_delete_ubuntu_commands(partition_name):
 
     # Remove both partition entries
     remove_partition_entry(partition_name)
-    remove_partition_entry("ubuntu-userdata")
+    if userdata_size:
+        remove_partition_entry("ubuntu-userdata")
     return True, "Deletion of Ubuntu and userdata partitions queued successfully"
 
 def get_ubuntu_userdata_owner():
