@@ -370,11 +370,11 @@ def get_os_download_info(os_name):
         ut_latest_rev = ut_json['number']
 
         ut_url = f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/ws/ubports-{codename}-{ut_latest_rev}.img"
-        ut_md5_url = None
+        ut_md5_url = f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/ws/ubports-{codename}-{ut_latest_rev}.img.md5"
     except Exception:
-        print("Failed to get latest revision from Jenkins, falling back to static URL")
-        ut_url = f"https://filedump.furios.io/rootfs/rootfs-ubports-{codename}.img"
-        ut_md5_url = f"https://filedump.furios.io/rootfs/rootfs-ubports-{codename}.img.md5"
+        print("Failed to get latest UT revision from Jenkins")
+        ut_url = None
+        ut_md5_url = None
 
     os_map = {
         "FuriOS": {
