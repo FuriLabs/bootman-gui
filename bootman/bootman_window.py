@@ -417,10 +417,11 @@ class BootmanWindow(Adw.ApplicationWindow):
 
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             save_path = self.cache_dir / f"{os_name.lower()}.img"
+            checksum_path = save_path.with_suffix(".md5")
 
             # First check for existing file and verify if needed
             if save_path.exists():
-                if md5_url:
+                if checksum_path.exists():
                     # Show verification dialog and start verification in background
                     status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying existing file...")
                     status_dialog.present()
@@ -450,10 +451,11 @@ class BootmanWindow(Adw.ApplicationWindow):
             # Create cancel event
             cancel_event = threading.Event()
             GLib.idle_add(self.connect_cancel_button, dialog, cancel_event)
+            checksum_path = file_path.with_suffix(".md5")
 
             # Get expected MD5
-            md5_response = urllib.request.urlopen(md5_url)
-            expected_md5 = md5_response.read().decode().split()[0]
+            with open(checksum_path, 'r') as f:
+                expected_md5 = f.read().split()[0]
 
             # Calculate MD5 of existing file
             md5_hash = hashlib.md5()
@@ -513,7 +515,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         else:
             # File is invalid, remove it and start download
             file_path.unlink(missing_ok=True)
-            self.show_toast(f"Existing file is invalid - downloading new copy")
+            self.show_toast("Existing file is invalid - downloading new copy")
             self.start_download(partition_name, os_name, url, md5_url)
         return False
 
@@ -572,6 +574,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         """Download OS image with progress updates and MD5 verification if available."""
         try:
             save_path = self.cache_dir / f"{os_name.lower()}.img"
+            checksum_path = save_path.with_suffix(".md5")
 
             # Download new file
             response = urllib.request.urlopen(url)
@@ -607,8 +610,10 @@ class BootmanWindow(Adw.ApplicationWindow):
             # Verify MD5 if we have it
             if md5_url:
                 try:
-                    md5_response = urllib.request.urlopen(md5_url)
-                    expected_md5 = md5_response.read().decode().split()[0]
+                    with open(checksum_path, 'w') as f:
+                        md5_response = urllib.request.urlopen(md5_url)
+                        expected_md5 = md5_response.read().decode().split()[0]
+                        f.write(expected_md5)
                     calculated_md5 = md5_hash.hexdigest()
                     if calculated_md5 != expected_md5:
                         raise Exception("MD5 verification failed")
