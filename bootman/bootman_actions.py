@@ -521,7 +521,7 @@ def is_ubuntu_partition_available():
 
 def create_ubuntu_userdata_commands(partition_name, output_callback = None):
     """
-    Reduce a given partition to 4GB and create a new ubuntu-userdata partition
+    Reduce a given partition to 5GB and create a new ubuntu-userdata partition
     with the remaining space.
     Args:
         partition_name: Name of the partition to resize
@@ -550,9 +550,9 @@ def create_ubuntu_userdata_commands(partition_name, output_callback = None):
         return False, f"Could not determine current partition size for {partition_name}"
 
     # Calculate new sizes
-    target_size = 4.0  # 4GB for the original partition
+    target_size = 5.0  # 5GB for the original partition
     if current_size <= target_size:
-        return False, f"Partition {partition_name} is already 4GB or smaller"
+        return False, f"Partition {partition_name} is already 5GB or smaller"
 
     remaining_size = current_size - target_size
     target_size_mb = int(target_size * 1024)
