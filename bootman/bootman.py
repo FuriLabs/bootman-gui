@@ -9,7 +9,7 @@ from bootman.bootman_window import BootmanWindow
 
 class BootmanApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id='io.FuriOS.Bootman')
+        super().__init__(application_id='io.furios.Bootman')
         self.connect('activate', self.on_activate)
 
     def on_activate(self, app):

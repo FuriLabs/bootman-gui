@@ -27,17 +27,17 @@ install:
 	install -m 755 main.py $(DESTDIR)$(INSTALL_DIR)/
 	install -m 755 scripts/bootman-helper $(DESTDIR)$(LIBEXECDIR)/
 
-	install -m 644 data/io.FuriOS.Bootman.desktop $(DESTDIR)$(DESKTOP_DIR)/
-	install -m 644 data/io.FuriOS.Bootman.svg $(DESTDIR)$(ICON_DIR)/
+	install -m 644 data/io.furios.Bootman.desktop $(DESTDIR)$(DESKTOP_DIR)/
+	install -m 644 data/io.furios.Bootman.svg $(DESTDIR)$(ICON_DIR)/
 	install -m 0644 data/io.furios.bootman.policy $(DESTDIR)$(POLKIT_DIR)/
 
-	ln -sf ../lib/bootman/main.py $(DESTDIR)$(BINDIR)/io.FuriOS.Bootman
+	ln -sf ../lib/bootman/main.py $(DESTDIR)$(BINDIR)/io.furios.Bootman
 
 uninstall:
-	rm -f $(DESTDIR)$(BINDIR)/io.FuriOS.Bootman
+	rm -f $(DESTDIR)$(BINDIR)/io.furios.Bootman
 	rm -f $(DESTDIR)$(LIBEXECDIR)/bootman-helper
 
 	rm -rf $(DESTDIR)$(INSTALL_DIR)
-	rm -f $(DESTDIR)$(DESKTOP_DIR)/io.FuriOS.Bootman.desktop
-	rm -f $(DESTDIR)$(ICON_DIR)/io.FuriOS.Bootman.svg
+	rm -f $(DESTDIR)$(DESKTOP_DIR)/io.furios.Bootman.desktop
+	rm -f $(DESTDIR)$(ICON_DIR)/io.furios.Bootman.svg
 	rm -f $(DESTIDR)$(POLKIT_DIR)/io.furios.bootman.policy

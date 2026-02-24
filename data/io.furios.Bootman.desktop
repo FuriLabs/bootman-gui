@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Bootman
-Exec=io.FuriOS.Bootman
-Icon=io.FuriOS.Bootman
+Exec=io.furios.Bootman
+Icon=io.furios.Bootman
 Terminal=false
 Type=Application
 StartupNotify=true
