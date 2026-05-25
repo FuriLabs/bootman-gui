@@ -361,6 +361,9 @@ def get_os_download_info(os_name):
     if not codename:
         return None, None
 
+    ut_url = None
+    ut_md5_url = None
+
     try:
         # Get ubuntu touch latest image URL from jenkins
         ut_jenkins_latest = urllib.request.urlopen(f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/lastSuccessfulBuild/api/json")
@@ -373,13 +376,27 @@ def get_os_download_info(os_name):
         ut_md5_url = f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/ws/ubports-{codename}-{ut_latest_rev}.img.md5"
     except Exception:
         print("Failed to get latest UT revision from Jenkins")
-        ut_url = None
-        ut_md5_url = None
+
+    furios_url = None
+    furios_md5_url = None
+
+    try:
+        # Get furios latest image URL from jenkins
+        furios_jenkins_latest = urllib.request.urlopen(f"https://jenkins.furios.io/job/furios%20production%20{codename}/lastSuccessfulBuild/api/json")
+        furios_data = furios_jenkins_latest.read().decode('utf-8')
+
+        furios_json = json.loads(furios_data)
+        furios_latest_rev = furios_json['number']
+
+        furios_url = f"https://jenkins.furios.io/job/furios%20production%20{codename}/ws/rootfs-{codename}-{furios_latest_rev}.img"
+        furios_md5_url = f"https://jenkins.furios.io/job/furios%20production%20{codename}/ws/rootfs-{codename}-{furios_latest_rev}.img.md5"
+    except Exception:
+        print("Failed to get latest FuriOS revision from Jenkins")
 
     os_map = {
         "FuriOS": {
-            "url": f"https://filedump.furios.io/rootfs/rootfs-{codename}.img",
-            "md5_url": f"https://filedump.furios.io/rootfs/rootfs-{codename}.img.md5"
+            "url": furios_url,
+            "md5_url": furios_md5_url
         },
         "Ubuntu Touch": {
             "url": ut_url,
