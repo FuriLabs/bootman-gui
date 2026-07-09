@@ -338,6 +338,11 @@ def get_supported_operating_systems():
             "FuriOS is a Debian based system made by FuriLabs",
             "computer-symbolic"
         ),
+	(
+            "FuriOS nightly",
+            "FuriOS is a Debian based system made by FuriLabs (devel)",
+            "computer-symbolic"
+        ),
         (
             "Ubuntu Touch",
             "Ubuntu Touch is a mobile version of Ubuntu",
@@ -381,7 +386,7 @@ def get_os_download_info(os_name):
     furios_md5_url = None
 
     try:
-        # Get furios latest image URL from jenkins
+        # Get furios production latest image URL from jenkins
         furios_jenkins_latest = urllib.request.urlopen(f"https://jenkins.furios.io/job/furios%20production%20{codename}/lastSuccessfulBuild/api/json")
         furios_data = furios_jenkins_latest.read().decode('utf-8')
 
@@ -391,12 +396,29 @@ def get_os_download_info(os_name):
         furios_url = f"https://jenkins.furios.io/job/furios%20production%20{codename}/ws/rootfs-{codename}-{furios_latest_rev}.img"
         furios_md5_url = f"https://jenkins.furios.io/job/furios%20production%20{codename}/ws/rootfs-{codename}-{furios_latest_rev}.img.md5"
     except Exception:
-        print("Failed to get latest FuriOS revision from Jenkins")
+        print("Failed to get latest FuriOS production revision from Jenkins")
+
+    try:
+        # Get furios nightly latest image URL from jenkins
+        furios_nightly_jenkins_latest = urllib.request.urlopen(f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/lastSuccessfulBuild/api/json")
+        furios_nightly_data = furios_nightly_jenkins_latest.read().decode('utf-8')
+
+        furios_nightly_json = json.loads(furios_nightly_data)
+        furios_nightly_latest_rev = furios_nightly_json['number']
+
+        furios_nightly_url = f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/ws/rootfs-{codename}-{furios_nightly_latest_rev}.img"
+        furios_nightly_md5_url = f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/ws/rootfs-{codename}-{furios_nightly_latest_rev}.img.md5"
+    except Exception:
+        print("Failed to get latest FuriOS nightly revision from Jenkins")
 
     os_map = {
         "FuriOS": {
             "url": furios_url,
             "md5_url": furios_md5_url
+        },
+	"FuriOS nightly": {
+            "url": furios_nightly_url,
+            "md5_url": furios_nightly_md5_url
         },
         "Ubuntu Touch": {
             "url": ut_url,
