@@ -242,12 +242,12 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def show_encryption_warning_dialog(self):
         """Show warning dialog when device is encrypted."""
-        dialog = ui.create_message_dialog(
+        dialog = ui.create_alert_dialog(
             self,
             "Installation Unavailable",
             "Device is encrypted, cannot proceed"
         )
-        dialog.present()
+        dialog.present(self)
 
     def on_new_install_apply(self, name, size, storage_location=None):
         """Handle new install application."""
@@ -291,7 +291,7 @@ class BootmanWindow(Adw.ApplicationWindow):
                 ("continue", "Continue", Adw.ResponseAppearance.SUGGESTED)
             ]
 
-            dialog = ui.create_message_dialog(
+            dialog = ui.create_alert_dialog(
                 self,
                 "Operation Already Queued",
                 f"A partition {op_text} ({display_name}) is already queued. Creating a new queue will remove the existing one. Do you want to continue?",
@@ -304,7 +304,7 @@ class BootmanWindow(Adw.ApplicationWindow):
             dialog.callback_kwargs = callback_kwargs
 
             dialog.connect("response", self.on_queue_warning_response)
-            dialog.present()
+            dialog.present(self)
         else:
             # No queue exists, proceed directly with the callback
             callback(*callback_args, **callback_kwargs)
@@ -336,12 +336,12 @@ class BootmanWindow(Adw.ApplicationWindow):
         operation, partition_name, display_name = queued
         op_text = "installation" if operation == "install" else "deletion"
 
-        dialog = ui.create_message_dialog(
+        dialog = ui.create_alert_dialog(
             self,
             f"{op_text.title()} Queued",
             f"The partition {op_text} has been queued successfully. You can now reboot your device for the changes to take effect."
         )
-        dialog.present()
+        dialog.present(self)
 
     def show_delete_dialog(self, partition_name):
         """Show confirmation dialog for deleting a partition."""
@@ -357,7 +357,7 @@ class BootmanWindow(Adw.ApplicationWindow):
             ("delete", "Delete", Adw.ResponseAppearance.DESTRUCTIVE)
         ]
 
-        dialog = ui.create_message_dialog(
+        dialog = ui.create_alert_dialog(
             self,
             "Confirm Deletion",
             f"Do you want to remove {partition_name}?",
@@ -365,7 +365,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         )
 
         dialog.connect("response", self.on_delete_response, partition_name)
-        dialog.present()
+        dialog.present(self)
 
     def on_delete_response(self, dialog, response, partition_name):
         """Handle partition deletion response."""
@@ -385,8 +385,8 @@ class BootmanWindow(Adw.ApplicationWindow):
 
     def show_error_dialog(self, message):
         """Show an error dialog with a message."""
-        dialog = ui.create_message_dialog(self, "Error", message)
-        dialog.present()
+        dialog = ui.create_alert_dialog(self, "Error", message)
+        dialog.present(self)
 
     def on_install_os(self, partition_name, os_name):
         """Handle OS installation selection."""
@@ -421,7 +421,7 @@ class BootmanWindow(Adw.ApplicationWindow):
                 if checksum_path.exists():
                     # Show verification dialog and start verification in background
                     status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying existing file...")
-                    status_dialog.present()
+                    status_dialog.present(self)
                     verify_thread = threading.Thread(
                         target=self.verify_file_thread,
                         args=(save_path, md5_url, status_dialog, partition_name, os_name, url)
@@ -521,7 +521,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog = ui.create_redownload_dialog(self, save_path)
         dialog.connect("response", lambda dlg, resp: self.handle_redownload_response(
             dlg, resp, partition_name, os_name, url, md5_url, save_path))
-        dialog.present()
+        dialog.present(self)
 
     def handle_redownload_response(self, dialog, response, partition_name, os_name, url, md5_url, save_path):
         """Handle user's choice about redownloading."""
@@ -557,7 +557,7 @@ class BootmanWindow(Adw.ApplicationWindow):
 
         dialog, progress_bar, status_label = ui.create_download_dialog(self, os_name, on_cancel)
         dialog.download_state = download_state
-        dialog.present()
+        dialog.present(self)
 
         # Start download in a separate thread
         cancel_event = threading.Event()
@@ -738,7 +738,7 @@ class BootmanWindow(Adw.ApplicationWindow):
         if md5_url:
             # Show verification dialog and start verification in background
             status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying downloaded file...")
-            status_dialog.present()
+            status_dialog.present(self)
 
             verify_thread = threading.Thread(
                 target=self.verify_file_thread,

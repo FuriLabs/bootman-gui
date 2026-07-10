@@ -298,13 +298,11 @@ def create_content_layout() -> Tuple[Gtk.Box, Gtk.ListBox, Gtk.ListBox]:
 
     return content_box, partition_list, queued_list
 
-def create_message_dialog(parent, heading: str, body: str, responses: List[Tuple[str, str, Optional[Adw.ResponseAppearance]]] = None) -> Adw.MessageDialog:
-    """Create a message dialog with specified responses."""
-    dialog = Adw.MessageDialog(
-        transient_for=parent,
+def create_alert_dialog(parent, heading: str, body: str, responses: List[Tuple[str, str, Optional[Adw.ResponseAppearance]]] = None) -> Adw.AlertDialog:
+    """Create an alert dialog with specified responses."""
+    dialog = Adw.AlertDialog(
         heading=heading,
-        body=body,
-        modal=True
+        body=body
     )
 
     if responses:
@@ -317,11 +315,9 @@ def create_message_dialog(parent, heading: str, body: str, responses: List[Tuple
 
     return dialog
 
-def create_download_dialog(parent, os_name: str, cancel_callback: Callable) -> Tuple[Adw.MessageDialog, Gtk.ProgressBar, Gtk.Label]:
+def create_download_dialog(parent, os_name: str, cancel_callback: Callable) -> Tuple[Adw.AlertDialog, Gtk.ProgressBar, Gtk.Label]:
     """Create a download dialog with progress bar."""
-    dialog = Adw.MessageDialog(
-        transient_for=parent,
-        modal=True,
+    dialog = Adw.AlertDialog(
         heading=f"Downloading {os_name}",
         body=f"Downloading {os_name} for installation..."
     )
@@ -353,11 +349,9 @@ def create_download_dialog(parent, os_name: str, cancel_callback: Callable) -> T
 
     return dialog, progress_bar, status_label
 
-def create_status_dialog(parent, heading: str, message: str) -> Adw.MessageDialog:
+def create_status_dialog(parent, heading: str, message: str) -> Adw.AlertDialog:
     """Create a simple status dialog for operations like verification."""
-    dialog = Adw.MessageDialog(
-        transient_for=parent,
-        modal=True,
+    dialog = Adw.AlertDialog(
         heading=heading,
         body=message
     )
@@ -368,11 +362,9 @@ def create_status_dialog(parent, heading: str, message: str) -> Adw.MessageDialo
 
     return dialog
 
-def create_redownload_dialog(parent, file_path: Path) -> Adw.MessageDialog:
+def create_redownload_dialog(parent, file_path: Path) -> Adw.AlertDialog:
     """Create dialog asking if user wants to redownload existing file."""
-    dialog = Adw.MessageDialog(
-        transient_for=parent,
-        modal=True,
+    dialog = Adw.AlertDialog(
         heading="File Already Exists",
         body="This file has already been downloaded. Do you want to download it again?"
     )
