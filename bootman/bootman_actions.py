@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-# Copyright (C) 2025 Bardia Moshiri <bardia@furilabs.com>
+# Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
 
 import json
 import os
