@@ -574,7 +574,12 @@ class BootmanWindow(Adw.ApplicationWindow):
                           cancel_event, partition_name, os_name, download_state):
         """Download OS image with progress updates and MD5 verification if available."""
         try:
-            save_path = self.cache_dir / f"{os_name.lower()}.img"
+            if os_name == "SailfishOS":
+                file_name = f"{os_name.lower()}.tar.bz2"
+            else:
+                file_name = f"{os_name.lower()}.img"
+
+            save_path = self.cache_dir / file_name
             checksum_path = save_path.with_suffix(".md5")
 
             # Download new file
