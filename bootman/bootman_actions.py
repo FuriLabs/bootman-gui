@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0
 # Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
 
-import json
 import os
 import subprocess
 import tempfile
 import threading
-import urllib.request
 from pathlib import Path
+from urllib3 import request
 
 _command_lock = threading.Lock()
 HELPER_PATH = "/usr/libexec/bootman-helper"
@@ -371,10 +370,8 @@ def get_os_download_info(os_name):
 
     try:
         # Get ubuntu touch latest image URL from jenkins
-        ut_jenkins_latest = urllib.request.urlopen(f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/lastSuccessfulBuild/api/json")
-        ut_data = ut_jenkins_latest.read().decode('utf-8')
-
-        ut_json = json.loads(ut_data)
+        ut_jenkins_latest = request("GET", f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/lastSuccessfulBuild/api/json")
+        ut_json = ut_jenkins_latest.json()
         ut_latest_rev = ut_json['number']
 
         ut_url = f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/ws/ubports-{codename}-{ut_latest_rev}.img"
@@ -387,10 +384,8 @@ def get_os_download_info(os_name):
 
     try:
         # Get furios production latest image URL from jenkins
-        furios_jenkins_latest = urllib.request.urlopen(f"https://jenkins.furios.io/job/furios%20production%20{codename}/lastSuccessfulBuild/api/json")
-        furios_data = furios_jenkins_latest.read().decode('utf-8')
-
-        furios_json = json.loads(furios_data)
+        furios_jenkins_latest = request("GET", f"https://jenkins.furios.io/job/furios%20production%20{codename}/lastSuccessfulBuild/api/json")
+        furios_json = furios_jenkins_latest.json()
         furios_latest_rev = furios_json['number']
 
         furios_url = f"https://jenkins.furios.io/job/furios%20production%20{codename}/ws/rootfs-{codename}-{furios_latest_rev}.img"
@@ -400,10 +395,8 @@ def get_os_download_info(os_name):
 
     try:
         # Get furios nightly latest image URL from jenkins
-        furios_nightly_jenkins_latest = urllib.request.urlopen(f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/lastSuccessfulBuild/api/json")
-        furios_nightly_data = furios_nightly_jenkins_latest.read().decode('utf-8')
-
-        furios_nightly_json = json.loads(furios_nightly_data)
+        furios_nightly_jenkins_latest = request("GET", f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/lastSuccessfulBuild/api/json")
+        furios_nightly_json = furios_nightly_jenkins_latest.json()
         furios_nightly_latest_rev = furios_nightly_json['number']
 
         furios_nightly_url = f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/ws/rootfs-{codename}-{furios_nightly_latest_rev}.img"
