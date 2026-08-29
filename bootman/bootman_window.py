@@ -2,16 +2,21 @@
 # Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
 
 import gi
+import hashlib
+import threading
+import urllib.request
+
+from pathlib import Path
+from typing import Sequence
+
+from bootman import ui
+import bootman.bootman_actions as actions
+from bootman.models import OSDownloadInfo, OperatingSystem, OSTypes
+
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, GLib
-from pathlib import Path
-import urllib.request
-import threading
-import hashlib
 
-import bootman.bootman_actions as actions
-from bootman import ui
+from gi.repository import Gtk, Adw, GLib
 
 class BootmanWindow(Adw.ApplicationWindow):
     def __init__(self, *args, **kwargs):
@@ -177,22 +182,34 @@ class BootmanWindow(Adw.ApplicationWindow):
             self.show_encryption_warning_dialog()
             return
 
-        try:
-            supported_os = actions.get_supported_operating_systems()
-
-            def on_os_selected(part_name, os_name):
-                # Close the bottom sheet first
+        def show_supported_os(supported_os: Sequence[OperatingSystem]):
+            def on_os_selected(part_name, download_info):
                 self.install_bottom_sheet.set_open(False)
-                # Then proceed with installation
-                self.on_install_os(part_name, os_name)
+                self.on_install_os(part_name, download_info)
 
-            content = ui.create_os_selection_bottom_sheet(partition_name, supported_os, on_os_selected)
+            try:
+                content = ui.create_os_selection_bottom_sheet(
+                    partition_name,
+                    supported_os,
+                    on_os_selected,
+                )
+                self.install_bottom_sheet.set_sheet(content)
+                self.install_bottom_sheet.set_open(True)
+            except Exception as e:
+                self.show_toast(f"Error showing OS selection: {str(e)}")
+            return False
 
-            # Use the existing install_bottom_sheet for OS selection too
-            self.install_bottom_sheet.set_sheet(content)
-            self.install_bottom_sheet.set_open(True)
-        except Exception as e:
-            self.show_toast(f"Error showing OS selection: {str(e)}")
+        def load_supported_os():
+            try:
+                supported_os = actions.get_supported_operating_systems(dir=self.cache_dir)
+                GLib.idle_add(show_supported_os, supported_os)
+            except Exception as e:
+                GLib.idle_add(
+                    self.show_toast,
+                    f"Error loading operating systems: {str(e)}",
+                )
+
+        threading.Thread(target=load_supported_os, daemon=True).start()
 
     def show_new_install_dialog(self, button):
         """Show dialog for creating a new partition install."""
@@ -388,10 +405,10 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog = ui.create_alert_dialog(self, "Error", message)
         dialog.present(self)
 
-    def on_install_os(self, partition_name, os_name):
+    def on_install_os(self, partition_name, download_info: OSDownloadInfo):
         """Handle OS installation selection."""
         try:
-            if os_name == "Ubuntu Touch":
+            if download_info.os_type == OSTypes.UbuntuTouch:
                 if actions.is_ubuntu_partition_available():
                     self.show_toast("An Ubuntu Touch installation exists already")
                     return
@@ -399,41 +416,42 @@ class BootmanWindow(Adw.ApplicationWindow):
                 self.show_queue_warning_dialog(
                     self.proceed_with_os_install,
                     partition_name,
-                    os_name
+                    download_info
                 )
             else:
                 # Proceed with normal installation flow
-                self.proceed_with_os_install(partition_name, os_name)
+                self.proceed_with_os_install(partition_name, download_info)
         except Exception as e:
             self.show_toast(f"Error during OS installation: {str(e)}")
 
-    def proceed_with_os_install(self, partition_name, os_name):
+    def proceed_with_os_install(self, partition_name,
+                                download_info: OSDownloadInfo):
         """Proceed with OS installation."""
         try:
-            url, md5_url = actions.get_os_download_info(os_name)
-
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            save_path = self.cache_dir / f"{os_name.lower()}.img"
-            checksum_path = save_path.with_suffix(".md5")
+            checksum_path = download_info.file.with_suffix(".md5")
 
             # First check for existing file and verify if needed
-            if save_path.exists():
+            if download_info.file.exists():
                 if checksum_path.exists():
                     # Show verification dialog and start verification in background
-                    status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying existing file...")
+                    status_dialog = ui.create_status_dialog(self, f"Processing {download_info.os_type.name}", "Verifying existing file...")
                     status_dialog.present(self)
                     verify_thread = threading.Thread(
                         target=self.verify_file_thread,
-                        args=(save_path, md5_url, status_dialog, partition_name, os_name, url)
+                        args=(status_dialog, partition_name, download_info)
                     )
                     verify_thread.daemon = True
                     verify_thread.start()
-                else:
+                elif download_info.url:
                     # No MD5 to verify, show redownload dialog directly
-                    self.show_redownload_prompt(partition_name, os_name, url, md5_url, save_path)
+                    self.show_redownload_prompt(partition_name, download_info)
+                else:
+                    self.show_toast(f"Using cached {download_info.os_type.name} image while offline")
+                    self.install_with_progress(partition_name, download_info)
             else:
                 # No existing file, start download directly
-                self.start_download(partition_name, os_name, url, md5_url)
+                self.start_download(partition_name, download_info)
         except Exception as e:
             self.show_toast(f"Error proceeding with OS install: {str(e)}")
 
@@ -442,13 +460,13 @@ class BootmanWindow(Adw.ApplicationWindow):
         dialog.connect("response", lambda dlg, resp: self.handle_verification_cancel(dlg, resp, cancel_event))
         return False
 
-    def verify_file_thread(self, file_path, md5_url, dialog, partition_name, os_name, url):
+    def verify_file_thread(self, dialog, partition_name, download_info: OSDownloadInfo):
         """Verify file in a background thread."""
         try:
             # Create cancel event
             cancel_event = threading.Event()
             GLib.idle_add(self.connect_cancel_button, dialog, cancel_event)
-            checksum_path = file_path.with_suffix(".md5")
+            checksum_path = download_info.file.with_suffix(".md5")
 
             # Get expected MD5
             with open(checksum_path, 'r') as f:
@@ -456,12 +474,12 @@ class BootmanWindow(Adw.ApplicationWindow):
 
             # Calculate MD5 of existing file
             md5_hash = hashlib.md5()
-            file_size = file_path.stat().st_size
+            file_size = download_info.file.stat().st_size
             read_size = 0
 
             f = None
             try:
-                f = open(file_path, 'rb')
+                f = open(download_info.file, 'rb')
 
                 while True:
                     if cancel_event.is_set():
@@ -490,56 +508,56 @@ class BootmanWindow(Adw.ApplicationWindow):
                 valid = calculated_md5 == expected_md5
 
                 GLib.idle_add(self.handle_verification_complete,
-                              dialog, valid, file_path, partition_name, os_name, url, md5_url)
+                              dialog, valid, partition_name, download_info)
         except Exception as e:
             print(f"Verification failed: {e}")
             if not cancel_event.is_set():
                 GLib.idle_add(self.handle_verification_complete,
-                              dialog, False, file_path, partition_name, os_name, url, md5_url)
+                              dialog, False, partition_name, download_info)
 
-    def handle_verification_complete(self, dialog, valid, file_path, partition_name, os_name, url, md5_url):
+    def handle_verification_complete(self, dialog, valid, partition_name, download_info: OSDownloadInfo):
         """Handle completion of file verification."""
         dialog.close()
 
         if valid:
             # This was an existing file verification
-            if url:
+            if download_info.url:
                 # Show redownload prompt
-                self.show_redownload_prompt(partition_name, os_name, url, md5_url, file_path)
+                self.show_redownload_prompt(partition_name, download_info)
             else:  # This was a post-download verification
-                self.show_toast(f"Verification complete - installing {os_name}")
-                self.install_with_progress(partition_name, os_name, file_path)
+                self.show_toast(f"Verification complete - installing {download_info.os_type.name}")
+                self.install_with_progress(partition_name, download_info)
         else:
             # File is invalid, remove it and start download
-            file_path.unlink(missing_ok=True)
+            download_info.file.unlink(missing_ok=True)
             self.show_toast("Existing file is invalid - downloading new copy")
-            self.start_download(partition_name, os_name, url, md5_url)
+            self.start_download(partition_name, download_info)
         return False
 
-    def show_redownload_prompt(self, partition_name, os_name, url, md5_url, save_path):
+    def show_redownload_prompt(self, partition_name, download_info: OSDownloadInfo):
         """Show the redownload dialog."""
-        dialog = ui.create_redownload_dialog(self, save_path)
+        dialog = ui.create_redownload_dialog(self, download_info.file)
         dialog.connect("response", lambda dlg, resp: self.handle_redownload_response(
-            dlg, resp, partition_name, os_name, url, md5_url, save_path))
+            dlg, resp, partition_name, download_info))
         dialog.present(self)
 
-    def handle_redownload_response(self, dialog, response, partition_name, os_name, url, md5_url, save_path):
+    def handle_redownload_response(self, dialog, response, partition_name, download_info: OSDownloadInfo):
         """Handle user's choice about redownloading."""
         dialog.close()
 
         if response == "redownload":
             # User wants to redownload
-            save_path.unlink(missing_ok=True)
-            self.start_download(partition_name, os_name, url, md5_url)
+            download_info.file.unlink(missing_ok=True)
+            self.start_download(partition_name, download_info)
         else:
             # User wants to use existing file
-            self.show_toast(f"Using existing file for {os_name}")
-            self.install_with_progress(partition_name, os_name, save_path)
+            self.show_toast(f"Using existing file for {download_info.os_type.name}")
+            self.install_with_progress(partition_name, download_info)
 
-    def start_download(self, partition_name, os_name, url, md5_url):
+    def start_download(self, partition_name, download_info: OSDownloadInfo):
         """Start the download process with progress dialog."""
-        if not url:
-            self.show_toast(f"This device does not have a version of {os_name} available")
+        if not download_info.url:
+            self.show_toast(f"This device does not have a version of {download_info.os_type.name} available")
             return
 
         # Create download state
@@ -555,7 +573,7 @@ class BootmanWindow(Adw.ApplicationWindow):
                 self.show_toast("Download cancelled")
             dialog.close()
 
-        dialog, progress_bar, status_label = ui.create_download_dialog(self, os_name, on_cancel)
+        dialog, progress_bar, status_label = ui.create_download_dialog(self, download_info.os_type.name, on_cancel)
         dialog.download_state = download_state
         dialog.present(self)
 
@@ -563,37 +581,33 @@ class BootmanWindow(Adw.ApplicationWindow):
         cancel_event = threading.Event()
         download_thread = threading.Thread(
             target=self.download_os_image,
-            args=(url, md5_url, progress_bar, status_label, dialog, cancel_event,
-                  partition_name, os_name, download_state)
+            args=(progress_bar, status_label, dialog, cancel_event,
+                  partition_name, download_info, download_state)
         )
 
         download_thread.daemon = True
         download_thread.start()
 
-    def download_os_image(self, url, md5_url, progress_bar, status_label, dialog,
-                          cancel_event, partition_name, os_name, download_state):
+    def download_os_image(self, progress_bar, status_label, dialog,
+                          cancel_event, partition_name, download_info: OSDownloadInfo, download_state):
         """Download OS image with progress updates and MD5 verification if available."""
         try:
-            if os_name == "SailfishOS":
-                file_name = f"{os_name.lower()}.tar.bz2"
-            else:
-                file_name = f"{os_name.lower()}.img"
-
-            save_path = self.cache_dir / file_name
-            checksum_path = save_path.with_suffix(".md5")
+            checksum_path = download_info.file.with_suffix(".md5")
+            if not download_info.url:
+                return
 
             # Download new file
-            response = urllib.request.urlopen(url)
+            response = urllib.request.urlopen(download_info.url)
             total_size = int(response.headers.get('content-length', 0))
             block_size = 8192
             downloaded = 0
             md5_hash = hashlib.md5()
 
-            with open(save_path, 'wb') as f:
+            with open(download_info.file, 'wb') as f:
                 while True:
                     if cancel_event.is_set():
                         # Clean up partial download
-                        save_path.unlink(missing_ok=True)
+                        download_info.file.unlink(missing_ok=True)
                         return
 
                     buffer = response.read(block_size)
@@ -614,10 +628,10 @@ class BootmanWindow(Adw.ApplicationWindow):
                                   total_size)
 
             # Verify MD5 if we have it
-            if md5_url:
+            if download_info.md5_url:
                 try:
                     with open(checksum_path, 'w') as f:
-                        md5_response = urllib.request.urlopen(md5_url)
+                        md5_response = urllib.request.urlopen(download_info.md5_url)
                         expected_md5 = md5_response.read().decode().split()[0]
                         f.write(expected_md5)
                     calculated_md5 = md5_hash.hexdigest()
@@ -631,9 +645,9 @@ class BootmanWindow(Adw.ApplicationWindow):
             download_state['completed'] = True
             GLib.idle_add(self.download_complete,
                           dialog,
-                          save_path,
                           partition_name,
-                          os_name)
+                          download_info
+            )
         except Exception as e:
             if not cancel_event.is_set():
                 GLib.idle_add(self.download_error, dialog, str(e))
@@ -649,9 +663,9 @@ class BootmanWindow(Adw.ApplicationWindow):
         status_label.set_text(f"Downloaded: {downloaded_mb:.1f} MB / {total_mb:.1f} MB")
         return False
 
-    def install_with_progress(self, partition_name, os_name, save_path):
+    def install_with_progress(self, partition_name, download_info: OSDownloadInfo):
         """Start installation with progress dialog."""
-        dialog, title_label, terminal, close_button = ui.create_progress_dialog(self, f"Installing {os_name}...")
+        dialog, title_label, terminal, close_button = ui.create_progress_dialog(self, f"Installing {download_info.os_type.name}...")
         dialog.present()
 
         buff = terminal.get_buffer()
@@ -665,27 +679,27 @@ class BootmanWindow(Adw.ApplicationWindow):
         def run_install():
             try:
                 success, message = actions.run_install_commands(
-                    partition_name, save_path, append_output)
+                    partition_name, download_info, append_output)
                 GLib.idle_add(lambda: self.handle_install_complete(
-                    dialog, title_label, close_button, success, message, os_name, partition_name))
+                    dialog, title_label, close_button, success, message, partition_name, download_info.os_type))
             except Exception as e:
                 print(f"error: {e}")
                 GLib.idle_add(lambda: self.handle_install_complete(
-                    dialog, title_label, close_button, False, str(e), os_name, partition_name))
+                    dialog, title_label, close_button, False, str(e), partition_name, download_info.os_type))
 
         # Start installation in background thread
         install_thread = threading.Thread(target=run_install)
         install_thread.daemon = True
         install_thread.start()
 
-    def handle_install_complete(self, dialog, title_label, close_button, success, message, os_name, partition_name):
+    def handle_install_complete(self, dialog, title_label, close_button, success, message, partition_name, os_type: OSTypes):
         """Handle installation completion."""
         if success:
-            if os_name == "Ubuntu Touch":
+            if os_type == OSTypes.UbuntuTouch:
                 self.start_userdata_split_immediate(partition_name)
 
-            title_label.set_text(f"Successfully installed {os_name}!")
-            self.show_toast(f"Successfully installed {os_name}")
+            title_label.set_text(f"Successfully installed {os_type.name}!")
+            self.show_toast(f"Successfully installed {os_type.name}")
         else:
             title_label.set_text("Installation Failed!")
             self.show_error_dialog(f"Installation failed: {message}")
@@ -733,28 +747,25 @@ class BootmanWindow(Adw.ApplicationWindow):
         t = threading.Thread(target=worker, daemon=True)
         t.start()
 
-    def download_complete(self, dialog, save_path, partition_name, os_name):
+    def download_complete(self, dialog, partition_name, download_info: OSDownloadInfo):
         """Handle download completion."""
         dialog.close()
 
-        # Get the md5_url again since we don't have it from the download context
-        _, md5_url = actions.get_os_download_info(os_name)
-
-        if md5_url:
+        if download_info.md5_url:
             # Show verification dialog and start verification in background
-            status_dialog = ui.create_status_dialog(self, f"Processing {os_name}", "Verifying downloaded file...")
+            status_dialog = ui.create_status_dialog(self, f"Processing {download_info.os_type.name}", "Verifying downloaded file...")
             status_dialog.present(self)
 
             verify_thread = threading.Thread(
                 target=self.verify_file_thread,
-                args=(save_path, md5_url, status_dialog, partition_name, os_name, None)  # url is None since we don't need to redownload
+                args=(status_dialog, partition_name, download_info)
             )
             verify_thread.daemon = True
             verify_thread.start()
         else:
-            self.show_toast(f"Download complete: {os_name}")
-            print(f"Downloaded image saved to: {save_path}")
-            self.install_with_progress(partition_name, os_name, save_path)
+            self.show_toast(f"Download complete: {download_info.os_type.name}")
+            print(f"Downloaded image saved to: {download_info.file}")
+            self.install_with_progress(partition_name, download_info)
         return False
 
     def handle_verification_cancel(self, dialog, response, cancel_event):

@@ -6,7 +6,10 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from typing import Tuple
 from urllib3 import request
+
+from bootman.models import OperatingSystem, OSDownloadInfo, OSRelease, OSTypes
 
 _command_lock = threading.Lock()
 HELPER_PATH = "/usr/libexec/bootman-helper"
@@ -324,148 +327,173 @@ def get_queued_partition():
     except Exception:
         return None
 
-def get_supported_operating_systems():
-    """
-    Get list of supported operating systems.
 
-    Returns:
-        list: List of tuples containing (name, description, icon_name)
-    """
-    return [
-        (
-            "FuriOS",
-            "FuriOS is a Debian based system made by FuriLabs",
-            "computer-symbolic"
-        ),
-	(
-            "FuriOS nightly",
-            "FuriOS is a Debian based system made by FuriLabs (devel)",
-            "computer-symbolic"
-        ),
-        (
-            "Ubuntu Touch",
-            "Ubuntu Touch is a mobile version of Ubuntu",
-            "computer-symbolic"
-        ),
-        (
-            "SailfishOS",
-            "SailfishOS community port of Jollas Mobile OS",
-            "computer-symbolic"
-        )
-    ]
-
-def get_os_download_info(os_name):
-    """
-    Get the download information for a specific operating system.
-
-    Args:
-        os_name (str): Name of the operating system
-
-    Returns:
-        tuple: (url, md5_url) or (None, None) if not found
-        url is the OS image URL
-        md5_url is the MD5 checksum URL (can be None if no MD5 verification needed)
-    """
-    codename = get_codename()
-    if not codename:
-        return None, None
-
-    ut_url = None
-    ut_md5_url = None
-
+def _get_jenkins_download_ws_info(
+    os_type: OSTypes,
+    file: Path,
+    release_name: str,
+    job_name: str,
+    codename: str,
+    artifact_extension: str,
+) -> OSDownloadInfo:
+    download_info = OSDownloadInfo(os_type=os_type, file=file)
     try:
-        # Get ubuntu touch latest image URL from jenkins
-        ut_jenkins_latest = request("GET", f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/lastSuccessfulBuild/api/json")
-        ut_json = ut_jenkins_latest.json()
-        ut_latest_rev = ut_json['number']
+        # Get latest build from jenkins
+        jenkins_latest = request(
+            "GET",
+            f"https://jenkins.furios.io/job/{job_name}/lastSuccessfulBuild/api/json",
+        ).json()
+        latest_rev = jenkins_latest["number"]
 
-        ut_url = f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/ws/ubports-{codename}-{ut_latest_rev}.img"
-        ut_md5_url = f"https://jenkins.furios.io/job/ubuntu%20touch%20{codename}/ws/ubports-{codename}-{ut_latest_rev}.img.md5"
-    except Exception:
-        print("Failed to get latest UT revision from Jenkins")
-
-    furios_url = None
-    furios_md5_url = None
-
-    try:
-        # Get furios production latest image URL from jenkins
-        furios_jenkins_latest = request("GET", f"https://jenkins.furios.io/job/furios%20production%20{codename}/lastSuccessfulBuild/api/json")
-        furios_json = furios_jenkins_latest.json()
-        furios_latest_rev = furios_json['number']
-
-        furios_url = f"https://jenkins.furios.io/job/furios%20production%20{codename}/ws/rootfs-{codename}-{furios_latest_rev}.img"
-        furios_md5_url = f"https://jenkins.furios.io/job/furios%20production%20{codename}/ws/rootfs-{codename}-{furios_latest_rev}.img.md5"
-    except Exception:
-        print("Failed to get latest FuriOS production revision from Jenkins")
-
-    furios_nightly_url = None
-    furios_nightly_md5_url = None
-
-    try:
-        # Get furios nightly latest image URL from jenkins
-        furios_nightly_jenkins_latest = request("GET", f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/lastSuccessfulBuild/api/json")
-        furios_nightly_json = furios_nightly_jenkins_latest.json()
-        furios_nightly_latest_rev = furios_nightly_json['number']
-
-        furios_nightly_url = f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/ws/rootfs-{codename}-{furios_nightly_latest_rev}.img"
-        furios_nightly_md5_url = f"https://jenkins.furios.io/job/furios%20nightly%20{codename}/ws/rootfs-{codename}-{furios_nightly_latest_rev}.img.md5"
-    except Exception:
-        print("Failed to get latest FuriOS nightly revision from Jenkins")
-
-    sailfish_url = None
-    sailfish_md5_url = None
-
-    try:
-        # Currently there is only krypton SailfishOS images
-        if codename != "krypton":
-            raise Exception(f"There is no SailfishOS release for {codename}")
-
-        # Get SailfishOS latest image URL from jenkins
-        sailfish_jenkins_latest = request("GET", f"https://jenkins.furios.io/job/sailfish-release-halium-{codename}/lastSuccessfulBuild/api/json")
-        sailfish_json = sailfish_jenkins_latest.json()
-        sailfish_latest_rev = sailfish_json['number']
-
-        sailfish_latest_data = request("GET", f"https://jenkins.furios.io/job/sailfish-release-halium-{codename}/{sailfish_latest_rev}/api/json")
-        sailfish_latest_json = sailfish_latest_data.json()
-        sailfish_artifacts = sailfish_latest_json['artifacts']
-
-        sailfish_artifact_path: Path | None = None
-        for artifact in sailfish_artifacts:
-            relative = Path(artifact['relativePath'])
-            if relative.suffix == ".bz2":
-                sailfish_artifact_path = relative
-
-        if sailfish_artifact_path:
-            sailfish_url = f"https://jenkins.furios.io/job/sailfish-release-halium-{codename}/{sailfish_latest_rev}/artifact/{sailfish_artifact_path.as_posix()}"
+        # WS doesnt have api/json to enumerate the artifacts so just hard code based on os_type
+        if os_type == OSTypes.FuriOS:
+            prefix = "rootfs"
+        elif os_type == OSTypes.UbuntuTouch:
+            prefix = "ubports"
         else:
-            raise Exception("Failed to find Sailfish tar.bz2 artifact path")
-    except Exception:
-        print("Failed to get latest SailfishOS revision from Jenkins")
+            raise Exception(f"Unsupported os_type: {os_type.name} for workspace")
 
-    os_map = {
-        "FuriOS": {
-            "url": furios_url,
-            "md5_url": furios_md5_url
-        },
-        "FuriOS nightly": {
-            "url": furios_nightly_url,
-            "md5_url": furios_nightly_md5_url
-        },
-        "SailfishOS": {
-            "url": sailfish_url,
-            "md5_url": sailfish_md5_url
-        },
-        "Ubuntu Touch": {
-            "url": ut_url,
-            "md5_url": ut_md5_url
-        },
-    }
+        download_info.url = f"https://jenkins.furios.io/job/{job_name}/ws/{prefix}-{codename}-{latest_rev}{artifact_extension}"
+        download_info.md5_url = f"https://jenkins.furios.io/job/{job_name}/ws/{prefix}-{codename}-{latest_rev}{artifact_extension}.md5"
+    except Exception as e:
+        print(
+            f"Failed to get jenkins build for {os_type.name} {release_name} {codename}: {e}"
+        )
 
-    if os_name in os_map:
-        return os_map[os_name]["url"], os_map[os_name].get("md5_url")
-    return None, None
+    return download_info
 
-def run_install_commands(partition_name, save_path, output_callback=None):
+
+def _get_jenkins_download_build_info(
+    os_type: OSTypes,
+    file: Path,
+    release_name: str,
+    job_name: str,
+    codename: str,
+    artifact_extension: str,
+) -> OSDownloadInfo:
+    download_info = OSDownloadInfo(os_type=os_type, file=file)
+    try:
+        # Get latest build from jenkins
+        jenkins_latest = request(
+            "GET",
+            f"https://jenkins.furios.io/job/{job_name}/lastSuccessfulBuild/api/json",
+        ).json()
+        latest_rev = jenkins_latest["number"]
+        artifacts = jenkins_latest["artifacts"]
+
+        image_path: Path | None = None
+        md5_path: Path | None = None
+        for artifact in artifacts:
+            relative = Path(artifact["relativePath"])
+            if relative.suffix == artifact_extension:
+                image_path = relative
+            if relative.suffix == ".md5":
+                md5_path = relative
+
+        if image_path:
+            download_info.url = f"https://jenkins.furios.io/job/{job_name}/{latest_rev}/artifact/{image_path.as_posix()}"
+
+        if md5_path:
+            download_info.md5_url = f"https://jenkins.furios.io/job/{job_name}/{latest_rev}/artifact/{md5_path.as_posix()}"
+    except Exception as e:
+        print(
+            f"Failed to get jenkins build for {os_type.name} {release_name} {codename}: {e}"
+        )
+
+    return download_info
+
+
+def get_supported_operating_systems(dir: Path) -> Tuple[OperatingSystem, ...]:
+    """Build the supported OS tree with the latest available download URLs."""
+    codename = get_codename()
+
+    furios_stable = _get_jenkins_download_ws_info(
+        os_type=OSTypes.FuriOS,
+        file=dir / f"furios_stable_{codename}.img",
+        release_name="stable",
+        job_name=f"furios%20production%20{codename}",
+        codename=codename,
+        artifact_extension=".img",
+    )
+    furios_nightly = _get_jenkins_download_ws_info(
+        os_type=OSTypes.FuriOS,
+        file=dir / f"furios_nightly_{codename}.img",
+        release_name="nightly",
+        job_name=f"furios%20nightly%20{codename}",
+        codename=codename,
+        artifact_extension=".img",
+    )
+    ubuntu_touch_stable = _get_jenkins_download_ws_info(
+        os_type=OSTypes.UbuntuTouch,
+        file=dir / f"ubuntu_touch_stable_{codename}.img",
+        release_name="stable",
+        job_name=f"ubuntu%20touch%20{codename}",
+        codename=codename,
+        artifact_extension=".img",
+    )
+
+    # Sailfish only supports krypton
+    if codename == "krypton":
+        sailfish_stable = _get_jenkins_download_build_info(
+                os_type=OSTypes.Sailfish,
+                file=dir / f"sailfish_stable_{codename}.tar.bz2",
+                release_name="stable",
+                job_name=f"sailfish-release-halium-{codename}",
+                codename=codename,
+                artifact_extension=".bz2",
+            )
+    else:
+       sailfish_stable = OSDownloadInfo(os_type=OSTypes.Sailfish, file=dir / f"sailfish_stable_{codename}.tar.bz2")
+
+    furios_os = OperatingSystem(
+            name="FuriOS",
+            description="FuriOS is a Debian based system made by FuriLabs",
+            options=(
+                OSRelease(
+                    name="Stable",
+                    description="Production release recommended for everyday use",
+                    download=furios_stable,
+                ),
+                OSRelease(
+                    name="Nightly",
+                    description="Development release with the latest changes",
+                    download=furios_nightly,
+                ),
+            ),
+        )
+
+    ubuntu_touch_os = OperatingSystem(
+        name="Ubuntu Touch",
+        description="Ubuntu Touch is a mobile version of Ubuntu",
+        options=(
+            OSRelease(
+                name="Stable",
+                description="Production release recommended for everyday use",
+                download=ubuntu_touch_stable,
+            ),
+        ),
+    )
+
+    sailfish_os = OperatingSystem(
+        name="Sailfish",
+        description="SailfishOS community port of Jollas Mobile OS",
+        options=(
+            OSRelease(
+                name="Stable",
+                description="Production release recommended for everyday use",
+                download=sailfish_stable,
+            ),
+        ),
+    )
+
+    return (
+        furios_os,
+        ubuntu_touch_os,
+        sailfish_os,
+    )
+
+
+def run_install_commands(partition_name, download_info: OSDownloadInfo, output_callback=None):
     """
     Create and execute installation commands with elevated privileges.
     Args:
@@ -490,9 +518,9 @@ def run_install_commands(partition_name, save_path, output_callback=None):
 
     try:
         mount_save: list[str] | None = None
-        if save_path.suffix == ".img":
+        if download_info.file.suffix == ".img":
             mount_save = [
-                f"mount -o ro \"{save_path}\" /mnt_rootfs",
+                f'mount -o ro "{download_info.file}" /mnt_rootfs',
                 "",
                 "# Copy files",
                 "rsync --archive -H -A -X --info=name2 /mnt_rootfs/* /mnt_newpart/ || true",
@@ -502,16 +530,16 @@ def run_install_commands(partition_name, save_path, output_callback=None):
                 "umount -l /mnt_rootfs",
                 "rm -rf /mnt_rootfs",
             ]
-        elif save_path.suffix == ".bz2":
-            # Based on SailfishOS bz2 image structure, might need to be changed for other bz2 images
-            mount_save = [
-                f"tar --numeric-owner --strip-components=2 -xvf {save_path} -C  /mnt_newpart",
-                "",
-                "# Cleanup",
-            ]
+        elif download_info.file.suffix == ".bz2":
+            if download_info.os_type == OSTypes.Sailfish:
+                mount_save = [
+                    f"tar --numeric-owner --strip-components=2 -xvf {download_info.file} -C  /mnt_newpart",
+                    "",
+                    "# Cleanup",
+                ]
 
         if not mount_save:
-            raise Exception(f"{save_path.suffix} systems are not supported")
+            raise Exception(f"{download_info.file.suffix} for {download_info.os_type.name} systems are not supported")
 
         # Create script content with proper command sequence
         commands = [
