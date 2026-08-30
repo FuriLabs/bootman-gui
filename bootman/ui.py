@@ -2,8 +2,10 @@
 # Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
 
 import gi
-from typing import Callable, Optional, List, Dict, Any, Tuple
+from typing import Callable, Optional, List, Dict, Sequence, Tuple, Union
 from pathlib import Path
+
+from bootman.models import OperatingSystem, OSRelease
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
@@ -124,54 +126,81 @@ def create_queued_partition_row(display_name: str, operation: str,
 
     return row
 
-def create_os_selection_bottom_sheet(partition_name: str, supported_os_list: List[Tuple[str, str, str]],
-                                     install_callback: Callable) -> Gtk.Box:
-    """Create a bottom sheet with supported OS options."""
-    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-    content.set_margin_top(36)
-    content.set_margin_bottom(24)
-    content.set_margin_start(24)
-    content.set_margin_end(24)
+def create_os_selection_bottom_sheet(partition_name: str,
+                                     supported_os_list: Sequence[OperatingSystem],
+                                     install_callback: Callable) -> Adw.NavigationView:
+    """Create a navigable OS selector with support for nested release options."""
+    navigation_view = Adw.NavigationView()
 
-    # Title
-    title_label = Gtk.Label(label="Select Operating System")
-    title_label.set_halign(Gtk.Align.START)
-    title_label.set_margin_bottom(12)
-    attr_list = Pango.AttrList()
-    attr_list.insert(Pango.attr_weight_new(Pango.Weight.BOLD))
-    attr_list.insert(Pango.attr_scale_new(1.2))
-    title_label.set_attributes(attr_list)
-    content.append(title_label)
+    def create_selection_page(title: str) -> Tuple[Adw.NavigationPage,
+                                                   Adw.PreferencesGroup]:
+        page = Adw.NavigationPage(title=title)
+        page_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
-    # OS list in a preferences group
-    os_group = Adw.PreferencesGroup()
+        header = Adw.HeaderBar()
+        header.set_title_widget(Adw.WindowTitle(title=title))
+        page_content.append(header)
 
-    # Add a row for each supported OS
-    for os_name, description, icon_name in supported_os_list:
-        os_row = Adw.ActionRow()
-        os_row.set_title(os_name)
-        os_row.set_subtitle(description)
+        selection_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        selection_content.set_margin_top(12)
+        selection_content.set_margin_bottom(24)
+        selection_content.set_margin_start(24)
+        selection_content.set_margin_end(24)
 
-        # Add OS icon
-        icon = Gtk.Image()
-        icon.set_from_icon_name(icon_name)
-        os_row.add_prefix(icon)
+        option_group = Adw.PreferencesGroup()
+        selection_content.append(option_group)
+        page_content.append(selection_content)
+        page.set_child(page_content)
+        return page, option_group
 
-        # Add arrow
-        arrow = Gtk.Image()
-        arrow.set_from_icon_name("go-next-symbolic")
-        os_row.add_suffix(arrow)
+    def create_option_row(
+        option: Union[OperatingSystem, OSRelease],
+    ) -> Adw.ActionRow:
+        option_row = Adw.ActionRow(
+            title=option.name,
+            subtitle=option.description,
+        )
+        option_row.set_activatable(True)
 
-        # Make the row clickable
-        row_click = Gtk.GestureClick.new()
-        row_click.connect("released", lambda gesture, n_press, x, y, part=partition_name, os=os_name: install_callback(part, os))
-        os_row.add_controller(row_click)
+        icon = Gtk.Image.new_from_icon_name(option.icon_name)
+        option_row.add_prefix(icon)
 
+        arrow = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        option_row.add_suffix(arrow)
+        return option_row
+
+    def create_release_page(
+        operating_system: OperatingSystem,
+    ) -> Adw.NavigationPage:
+        page, option_group = create_selection_page(
+            f"Select {operating_system.name} Version"
+        )
+
+        for release in operating_system.options:
+            option_row = create_option_row(release)
+            option_row.connect(
+                "activated",
+                lambda row, download=release.download: install_callback(
+                    partition_name, download
+                ),
+            )
+            option_group.add(option_row)
+
+        return page
+
+    main_page, os_group = create_selection_page("Select Operating System")
+    for operating_system in supported_os_list:
+        os_row = create_option_row(operating_system)
+        os_row.connect(
+            "activated",
+            lambda row, selected=operating_system: navigation_view.push(
+                create_release_page(selected)
+            ),
+        )
         os_group.add(os_row)
 
-    content.append(os_group)
-
-    return content
+    navigation_view.add(main_page)
+    return navigation_view
 
 def create_new_install_dialog_content(external_disks: List[str],
                                       apply_callback: Callable,
