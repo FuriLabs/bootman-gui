@@ -128,7 +128,8 @@ def create_queued_partition_row(display_name: str, operation: str,
 
 def create_os_selection_bottom_sheet(partition_name: str,
                                      supported_os_list: Sequence[OperatingSystem],
-                                     install_callback: Callable) -> Adw.NavigationView:
+                                     install_callback: Callable,
+                                     local_file_callback: Callable) -> Adw.NavigationView:
     """Create a navigable OS selector with support for nested release options."""
     navigation_view = Adw.NavigationView()
 
@@ -185,6 +186,22 @@ def create_os_selection_bottom_sheet(partition_name: str,
                 ),
             )
             option_group.add(option_row)
+
+        local_row = Adw.ActionRow(
+            title="Local",
+            subtitle="Install an OS image from a local file",
+        )
+        local_row.set_activatable(True)
+        local_row.add_prefix(Gtk.Image.new_from_icon_name("folder-open-symbolic"))
+        local_row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        os_type = operating_system.options[0].download.os_type
+        local_row.connect(
+            "activated",
+            lambda row, selected_os_type=os_type: local_file_callback(
+                partition_name, selected_os_type
+            ),
+        )
+        option_group.add(local_row)
 
         return page
 
