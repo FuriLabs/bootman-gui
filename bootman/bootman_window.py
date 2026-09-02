@@ -16,7 +16,7 @@ from bootman.models import OSDownloadInfo, OperatingSystem, OSTypes
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Gtk, Adw, GLib
+from gi.repository import Gtk, Adw, Gio, GLib
 
 class BootmanWindow(Adw.ApplicationWindow):
     def __init__(self, *args, **kwargs):
@@ -187,11 +187,15 @@ class BootmanWindow(Adw.ApplicationWindow):
                 self.install_bottom_sheet.set_open(False)
                 self.on_install_os(part_name, download_info)
 
+            def on_local_selected(part_name, os_type):
+                self.open_local_os_file_picker(part_name, os_type)
+
             try:
                 content = ui.create_os_selection_bottom_sheet(
                     partition_name,
                     supported_os,
                     on_os_selected,
+                    on_local_selected,
                 )
                 self.install_bottom_sheet.set_sheet(content)
                 self.install_bottom_sheet.set_open(True)
@@ -210,6 +214,55 @@ class BootmanWindow(Adw.ApplicationWindow):
                 )
 
         threading.Thread(target=load_supported_os, daemon=True).start()
+
+    def open_local_os_file_picker(self, partition_name: str, os_type: OSTypes):
+        """Open the portal-backed file picker for a local OS image."""
+        dialog = Gtk.FileDialog()
+        dialog.set_title(f"Select {os_type.name} Image")
+
+        file_filter = Gtk.FileFilter()
+        if os_type == OSTypes.Sailfish:
+            file_filter.set_name("Sailfish archives (*.tar.bz2)")
+            file_filter.add_pattern("*.tar.bz2")
+        else:
+            file_filter.set_name("Disk images (*.img)")
+            file_filter.add_pattern("*.img")
+
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(file_filter)
+        dialog.set_filters(filters)
+        dialog.set_default_filter(file_filter)
+
+        def on_file_selected(file_dialog, result):
+            try:
+                selected_file = file_dialog.open_finish(result)
+                file_path = selected_file.get_path()
+                if file_path is None:
+                    self.show_toast("The selected file is not available as a local path")
+                    return
+
+                path = Path(file_path)
+                if os_type == OSTypes.Sailfish:
+                    valid_file = path.name.endswith(".tar.bz2")
+                    expected_type = ".tar.bz2 archive"
+                else:
+                    valid_file = path.suffix == ".img"
+                    expected_type = ".img file"
+
+                if not valid_file:
+                    self.show_toast(f"Select a {expected_type} for {os_type.name}")
+                    return
+
+                download_info = OSDownloadInfo(os_type=os_type, file=path)
+                self.install_bottom_sheet.set_open(False)
+                self.on_install_os(partition_name, download_info)
+            except GLib.Error as error:
+                if not error.matches(
+                    Gio.io_error_quark(), Gio.IOErrorEnum.CANCELLED
+                ):
+                    self.show_toast(f"Error selecting local OS image: {error.message}")
+
+        dialog.open(self, None, on_file_selected)
 
     def show_new_install_dialog(self, button):
         """Show dialog for creating a new partition install."""

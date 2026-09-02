@@ -2,6 +2,7 @@
 # Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
 
 import os
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -517,10 +518,11 @@ def run_install_commands(partition_name, download_info: OSDownloadInfo, output_c
     script_path = Path("/tmp/bootman_install.sh")
 
     try:
+        image_path = shlex.quote(str(download_info.file))
         mount_save: list[str] | None = None
         if download_info.file.suffix == ".img":
             mount_save = [
-                f'mount -o ro "{download_info.file}" /mnt_rootfs',
+                f"mount -o ro {image_path} /mnt_rootfs",
                 "",
                 "# Copy files",
                 "rsync --archive -H -A -X --info=name2 /mnt_rootfs/* /mnt_newpart/ || true",
@@ -533,7 +535,7 @@ def run_install_commands(partition_name, download_info: OSDownloadInfo, output_c
         elif download_info.file.suffix == ".bz2":
             if download_info.os_type == OSTypes.Sailfish:
                 mount_save = [
-                    f"tar --numeric-owner --strip-components=2 -xvf {download_info.file} -C  /mnt_newpart",
+                    f"tar --numeric-owner --strip-components=2 -xvf {image_path} -C /mnt_newpart",
                     "",
                     "# Cleanup",
                 ]
