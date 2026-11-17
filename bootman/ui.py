@@ -132,6 +132,8 @@ def create_os_selection_bottom_sheet(partition_name: str,
                                      local_file_callback: Callable) -> Adw.NavigationView:
     """Create a navigable OS selector with support for nested release options."""
     navigation_view = Adw.NavigationView()
+    navigation_view.set_size_request(-1, 360)
+    navigation_view.set_vhomogeneous(True)
 
     def create_selection_page(title: str) -> Tuple[Adw.NavigationPage,
                                                    Adw.PreferencesGroup]:
@@ -150,7 +152,12 @@ def create_os_selection_bottom_sheet(partition_name: str,
 
         option_group = Adw.PreferencesGroup()
         selection_content.append(option_group)
-        page_content.append(selection_content)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+        scrolled.set_child(selection_content)
+        page_content.append(scrolled)
         page.set_child(page_content)
         return page, option_group
 
@@ -206,17 +213,19 @@ def create_os_selection_bottom_sheet(partition_name: str,
         return page
 
     main_page, os_group = create_selection_page("Select Operating System")
+    navigation_view.add(main_page)
+
     for operating_system in supported_os_list:
+        release_page = create_release_page(operating_system)
+        navigation_view.add(release_page)
+
         os_row = create_option_row(operating_system)
         os_row.connect(
             "activated",
-            lambda row, selected=operating_system: navigation_view.push(
-                create_release_page(selected)
-            ),
+            lambda row, page=release_page: navigation_view.push(page),
         )
         os_group.add(os_row)
 
-    navigation_view.add(main_page)
     return navigation_view
 
 def create_new_install_dialog_content(external_disks: List[str],
@@ -305,6 +314,7 @@ def create_main_window_layout() -> Tuple[Adw.ToastOverlay, Adw.ToolbarView, Adw.
     toolbar_view = Adw.ToolbarView()
     install_bottom_sheet = Adw.BottomSheet()
     install_bottom_sheet.set_modal(True)
+    install_bottom_sheet.set_show_drag_handle(False)
 
     navigation_view = Adw.NavigationView()
 

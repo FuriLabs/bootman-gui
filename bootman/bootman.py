@@ -23,6 +23,9 @@ class Bootman(Adw.Application):
         super().__init__(application_id='io.furios.Bootman')
         self.connect('activate', self.on_activate)
         self.win = None
+        self.supported_os = None
+        self.supported_os_loading = False
+        self.network_monitor = Gio.NetworkMonitor.get_default()
 
     def on_activate(self, app):
         if self.win is not None:
@@ -61,6 +64,10 @@ class Bootman(Adw.Application):
 
         self.navigation_view.add(self.main_page)
         self.win.set_content(self.toast_overlay)
+        self.network_monitor.connect("network-changed", self.on_network_changed)
+
+        # Cache available OS releases in memory at startup
+        self.load_supported_operating_systems()
 
     def show_toast(self, message, duration=3):
         """Display a toast message."""
@@ -184,44 +191,89 @@ class Bootman(Adw.Application):
         except Exception as e:
             self.show_toast(f"Error reading partitions: {str(e)}")
 
+    def on_network_changed(self, _monitor, available):
+        """Retry startup preloading when connectivity is restored."""
+        if available and self.supported_os is None:
+            self.load_supported_operating_systems()
+
+    def load_supported_operating_systems(self):
+        """Resolve Jenkins downloads once per session."""
+        if self.supported_os is not None or self.supported_os_loading:
+            return
+
+        self.supported_os_loading = True
+
+        def load():
+            try:
+                supported_os = actions.get_supported_operating_systems(
+                    dir=self.cache_dir
+                )
+                if not any(
+                    release.download.url
+                    for os_entry in supported_os
+                    for release in os_entry.options
+                ):
+                    raise RuntimeError("No operating system releases could be retrieved")
+                GLib.idle_add(self.on_supported_os_loaded, supported_os)
+            except Exception as error:
+                GLib.idle_add(self.on_supported_os_load_failed, str(error))
+
+        threading.Thread(target=load, daemon=True).start()
+
+    def on_supported_os_loaded(self, supported_os: Sequence[OperatingSystem]):
+        """Store the fetched OS choices."""
+        self.supported_os = supported_os
+        self.supported_os_loading = False
+        return False
+
+    def on_supported_os_load_failed(self, error):
+        """Leave the chooser unavailable if the startup fetch fails."""
+        print(f"Could not fetch available operating systems: {error}")
+        self.supported_os_loading = False
+        return False
+
+    def populate_os_selection_bottom_sheet(self, partition_name):
+        """Populate the chooser using OS releases cached at startup."""
+        def on_os_selected(part_name, download_info):
+            self.install_bottom_sheet.set_open(False)
+            self.on_install_os(part_name, download_info)
+
+        def on_local_selected(part_name, os_type):
+            self.open_local_os_file_picker(part_name, os_type)
+
+        try:
+            content = ui.create_os_selection_bottom_sheet(
+                partition_name,
+                self.supported_os,
+                on_os_selected,
+                on_local_selected,
+            )
+            self.install_bottom_sheet.set_sheet(content)
+            return True
+        except Exception as error:
+            self.install_bottom_sheet.set_open(False)
+            self.show_toast(f"Error showing OS selection: {error}")
+            return False
+
     def show_os_selection_bottom_sheet(self, partition_name):
-        """Show the OS selection bottom sheet."""
+        """Show the cached chooser."""
         if actions.is_encrypted():
             self.show_encryption_warning_dialog()
             return
 
-        def show_supported_os(supported_os: Sequence[OperatingSystem]):
-            def on_os_selected(part_name, download_info):
-                self.install_bottom_sheet.set_open(False)
-                self.on_install_os(part_name, download_info)
+        if not self.network_monitor.get_network_available():
+            self.show_toast("Cannot get the available operating systems. Check your internet connection")
+            return
 
-            def on_local_selected(part_name, os_type):
-                self.open_local_os_file_picker(part_name, os_type)
+        if self.supported_os is None:
+            if self.supported_os_loading:
+                self.show_toast("Still checking available operating systems")
+            else:
+                self.show_toast("Cannot get the available operating systems.")
+            return
 
-            try:
-                content = ui.create_os_selection_bottom_sheet(
-                    partition_name,
-                    supported_os,
-                    on_os_selected,
-                    on_local_selected,
-                )
-                self.install_bottom_sheet.set_sheet(content)
-                self.install_bottom_sheet.set_open(True)
-            except Exception as e:
-                self.show_toast(f"Error showing OS selection: {str(e)}")
-            return False
-
-        def load_supported_os():
-            try:
-                supported_os = actions.get_supported_operating_systems(dir=self.cache_dir)
-                GLib.idle_add(show_supported_os, supported_os)
-            except Exception as e:
-                GLib.idle_add(
-                    self.show_toast,
-                    f"Error loading operating systems: {str(e)}",
-                )
-
-        threading.Thread(target=load_supported_os, daemon=True).start()
+        if self.populate_os_selection_bottom_sheet(partition_name):
+            self.install_bottom_sheet.set_open(True)
 
     def open_local_os_file_picker(self, partition_name: str, os_type: OSTypes):
         """Open the portal-backed file picker for a local OS image."""
