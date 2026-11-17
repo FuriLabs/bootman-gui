@@ -178,6 +178,44 @@ def create_external_install_commands(name, storage_location):
 
    return True, "External partition creation queued successfully"
 
+def is_partition_available(partition_name):
+    """Check whether a recorded LVM partition or external device exists."""
+    if os.path.isabs(partition_name):
+        return os.path.exists(partition_name)
+
+    lvm_type = get_lvm_type()
+    return bool(lvm_type and os.path.exists(f"/dev/{lvm_type}/{partition_name}"))
+
+
+def is_partition_queued_for_creation(partition_name):
+    """Check whether a partition is queued for installation."""
+    queued = get_queued_partition()
+    return bool(queued and queued[0] == "install" and queued[1] == partition_name)
+
+
+def remove_stale_partition_entry(partition_name):
+    """Forget a missing partition without queueing any disk operations."""
+    if is_partition_queued_for_creation(partition_name):
+        return False, "Partition creation is queued. reboot to create it"
+
+    if not os.path.isabs(partition_name) and not get_lvm_type():
+        return False, "LVM volume group is unavailable"
+
+    if is_partition_available(partition_name):
+        return False, "Partition is still available"
+
+    success, _ = remove_partition_entry(partition_name)
+    if not success:
+        return False, "Failed to remove stale partition entry"
+
+    if get_ubuntu_userdata_owner() == partition_name:
+        success, _ = run_helper("remove_ubuntu_owner", partition_name)
+        if not success:
+            return False, "Stale entry removed, but failed to clear Ubuntu userdata ownership"
+
+    return True, "Removed stale partition entry"
+
+
 def create_delete_commands(partition_name):
     """Create commands for deleting a partition."""
     lvm_type = get_lvm_type()
@@ -230,9 +268,11 @@ def create_delete_commands(partition_name):
         remove_partition_entry(partition_name)
         return True, "Deletion queued successfully"
     elif os.path.exists(partition_name):
-        remove_partition_entry(partition_name)
+        success, _ = remove_partition_entry(partition_name)
+        if not success:
+            return False, "Failed to remove external storage entry"
         return True, "Successfully deleted external storage install"
-    return False, "Partition is not available"
+    return remove_stale_partition_entry(partition_name)
 
 def remove_partition_entry(partition_name):
     return run_helper("remove_entry", partition_name)
@@ -792,9 +832,9 @@ def create_delete_ubuntu_commands(partition_name):
     if not lvm_type:
         return False, "No LVM volume group found"
 
-    # Check if the main partition exists
+    # A manually removed Ubuntu partition only needs its stale entry cleaned up.
     if not os.path.exists(f"/dev/{lvm_type}/{partition_name}"):
-        return False, "Ubuntu partition is not available"
+        return remove_stale_partition_entry(partition_name)
 
     # Get main partition size
     success, output = run_helper("lvdisplay", f"/dev/{lvm_type}/{partition_name}")

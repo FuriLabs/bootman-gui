@@ -149,15 +149,28 @@ class Bootman(Adw.Application):
 
             partitions = actions.read_partitions_file(partitions_file)
             is_encrypted = actions.is_encrypted()
+            queued = actions.get_queued_partition()
+            lvm_available = bool(actions.get_lvm_type())
 
             for partition_name, display_name in partitions:
                 # Skip the userdata partition as we'll show it merged with its owner
                 if partition_name in skip_partitions:
                     continue
 
+                pending_creation = bool(queued and queued[0] == "install" and
+                                        queued[1] == partition_name)
+                partition_available = actions.is_partition_available(partition_name)
+                lvm_unavailable = not lvm_available and not Path(partition_name).is_absolute()
+
                 # Determine subtitle
                 subtitle = None
-                if ubuntu_userdata_owner and partition_name == ubuntu_userdata_owner:
+                if pending_creation:
+                    subtitle = "Queued for creation"
+                elif lvm_unavailable:
+                    subtitle = "LVM volume group unavailable"
+                elif not partition_available:
+                    subtitle = "Partition not found"
+                elif ubuntu_userdata_owner and partition_name == ubuntu_userdata_owner:
                     size = actions.get_partition_size(partition_name)
                     userdata_size = actions.get_partition_size("ubuntu-userdata")
 
@@ -174,13 +187,15 @@ class Bootman(Adw.Application):
                         subtitle = f"Size: {size}"
 
                 can_remove = (partition_name != 'droidian-rootfs' and partition_name != 'furios-rootfs' and
+                              not pending_creation and not lvm_unavailable and
                               not actions.is_partition_mounted(partition_name))
 
                 install_callback = None
                 delete_callback = None
 
                 if can_remove:
-                    install_callback = lambda p=partition_name: self.show_os_selection_bottom_sheet(p)
+                    if partition_available:
+                        install_callback = lambda p=partition_name: self.show_os_selection_bottom_sheet(p)
                     delete_callback = lambda btn, p=partition_name: self.show_delete_dialog(p)
 
                 row = ui.create_partition_row(display_name, subtitle, can_remove,
@@ -475,6 +490,10 @@ class Bootman(Adw.Application):
 
     def show_delete_dialog(self, partition_name):
         """Show confirmation dialog for deleting a partition."""
+        if not actions.is_partition_available(partition_name):
+            self.show_delete_confirmation(partition_name)
+            return
+
         self.show_queue_warning_dialog(
             self.show_delete_confirmation,
             partition_name
@@ -487,10 +506,16 @@ class Bootman(Adw.Application):
             ("delete", "Delete", Adw.ResponseAppearance.DESTRUCTIVE)
         ]
 
+        if actions.is_partition_available(partition_name):
+            message = f"Do you want to remove {partition_name}?"
+        else:
+            message = (f"{partition_name} no longer exists. Remove it from Bootman's "
+                       "partition list? No disk operations or reboot are needed.")
+
         dialog = ui.create_alert_dialog(
             self.win,
             "Confirm Deletion",
-            f"Do you want to remove {partition_name}?",
+            message,
             responses
         )
 
@@ -500,17 +525,22 @@ class Bootman(Adw.Application):
     def on_delete_response(self, dialog, response, partition_name):
         """Handle partition deletion response."""
         if response == "delete":
-            ubuntu_owner = actions.get_ubuntu_userdata_owner()
-            if ubuntu_owner and ubuntu_owner == partition_name:
-                # Ubuntu Touch partition (needs special handling)
-                success, message = actions.create_delete_ubuntu_commands(partition_name)
+            partition_available = actions.is_partition_available(partition_name)
+            if not partition_available:
+                success, message = actions.remove_stale_partition_entry(partition_name)
             else:
-                # Normal partition
-                success, message = actions.create_delete_commands(partition_name)
+                ubuntu_owner = actions.get_ubuntu_userdata_owner()
+                if ubuntu_owner and ubuntu_owner == partition_name:
+                    # Ubuntu Touch partition (needs special handling)
+                    success, message = actions.create_delete_ubuntu_commands(partition_name)
+                else:
+                    # Normal partition
+                    success, message = actions.create_delete_commands(partition_name)
             self.show_toast(message)
             if success:
                 self.process_partitions()
-                self.show_reboot_dialog()
+                if partition_available:
+                    self.show_reboot_dialog()
         dialog.close()
 
     def show_error_dialog(self, message):

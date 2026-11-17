@@ -44,6 +44,12 @@ case "$ACTION" in
         entry=$(echo "$1" | sed 's/\//\\\//g')
         sed -i "/^$entry:/d" /var/lib/furios-persist/bootman/partitions
         ;;
+    "remove_ubuntu_owner")
+        owner_file=/var/lib/furios-persist/bootman/ubuntu-userdata
+        if [ -f "$owner_file" ] && [ "$(cat "$owner_file")" = "$1" ]; then
+            rm -f "$owner_file"
+        fi
+        ;;
     "blockdev")
         blockdev --getsize64 "$1"
         ;;
