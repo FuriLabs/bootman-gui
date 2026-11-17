@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Tuple
 from urllib3 import request
@@ -343,6 +344,8 @@ def _get_jenkins_download_ws_info(
         jenkins_latest = request(
             "GET",
             f"https://jenkins.furios.io/job/{job_name}/lastSuccessfulBuild/api/json",
+            timeout=5.0,
+            retries=False,
         ).json()
         latest_rev = jenkins_latest["number"]
 
@@ -378,6 +381,8 @@ def _get_jenkins_download_build_info(
         jenkins_latest = request(
             "GET",
             f"https://jenkins.furios.io/job/{job_name}/lastSuccessfulBuild/api/json",
+            timeout=5.0,
+            retries=False,
         ).json()
         latest_rev = jenkins_latest["number"]
         artifacts = jenkins_latest["artifacts"]
@@ -408,34 +413,40 @@ def get_supported_operating_systems(dir: Path) -> Tuple[OperatingSystem, ...]:
     """Build the supported OS tree with the latest available download URLs."""
     codename = get_codename()
 
-    furios_stable = _get_jenkins_download_ws_info(
-        os_type=OSTypes.FuriOS,
-        file=dir / f"furios_stable_{codename}.img",
-        release_name="stable",
-        job_name=f"furios%20production%20{codename}",
-        codename=codename,
-        artifact_extension=".img",
-    )
-    furios_nightly = _get_jenkins_download_ws_info(
-        os_type=OSTypes.FuriOS,
-        file=dir / f"furios_nightly_{codename}.img",
-        release_name="nightly",
-        job_name=f"furios%20nightly%20{codename}",
-        codename=codename,
-        artifact_extension=".img",
-    )
-    ubuntu_touch_stable = _get_jenkins_download_ws_info(
-        os_type=OSTypes.UbuntuTouch,
-        file=dir / f"ubuntu_touch_stable_{codename}.img",
-        release_name="stable",
-        job_name=f"ubuntu%20touch%20{codename}",
-        codename=codename,
-        artifact_extension=".img",
-    )
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        furios_stable_task = executor.submit(
+            _get_jenkins_download_ws_info,
+            os_type=OSTypes.FuriOS,
+            file=dir / f"furios_stable_{codename}.img",
+            release_name="stable",
+            job_name=f"furios%20production%20{codename}",
+            codename=codename,
+            artifact_extension=".img",
+        )
+        furios_nightly_task = executor.submit(
+            _get_jenkins_download_ws_info,
+            os_type=OSTypes.FuriOS,
+            file=dir / f"furios_nightly_{codename}.img",
+            release_name="nightly",
+            job_name=f"furios%20nightly%20{codename}",
+            codename=codename,
+            artifact_extension=".img",
+        )
+        ubuntu_touch_stable_task = executor.submit(
+            _get_jenkins_download_ws_info,
+            os_type=OSTypes.UbuntuTouch,
+            file=dir / f"ubuntu_touch_stable_{codename}.img",
+            release_name="stable",
+            job_name=f"ubuntu%20touch%20{codename}",
+            codename=codename,
+            artifact_extension=".img",
+        )
 
-    # Sailfish only supports krypton
-    if codename == "krypton":
-        sailfish_stable = _get_jenkins_download_build_info(
+        # Sailfish only supports krypton.
+        sailfish_stable_task = None
+        if codename == "krypton":
+            sailfish_stable_task = executor.submit(
+                _get_jenkins_download_build_info,
                 os_type=OSTypes.Sailfish,
                 file=dir / f"sailfish_stable_{codename}.tar.bz2",
                 release_name="stable",
@@ -443,8 +454,17 @@ def get_supported_operating_systems(dir: Path) -> Tuple[OperatingSystem, ...]:
                 codename=codename,
                 artifact_extension=".bz2",
             )
-    else:
-       sailfish_stable = OSDownloadInfo(os_type=OSTypes.Sailfish, file=dir / f"sailfish_stable_{codename}.tar.bz2")
+
+        furios_stable = furios_stable_task.result()
+        furios_nightly = furios_nightly_task.result()
+        ubuntu_touch_stable = ubuntu_touch_stable_task.result()
+        if sailfish_stable_task is not None:
+            sailfish_stable = sailfish_stable_task.result()
+        else:
+            sailfish_stable = OSDownloadInfo(
+                os_type=OSTypes.Sailfish,
+                file=dir / f"sailfish_stable_{codename}.tar.bz2",
+            )
 
     furios_os = OperatingSystem(
             name="FuriOS",
