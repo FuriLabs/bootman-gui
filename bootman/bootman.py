@@ -106,9 +106,20 @@ class Bootman(Adw.Application):
         """Process and display partitions."""
         partitions_file = Path("/var/lib/furios-persist/bootman/partitions")
 
-        if not partitions_file.exists():
+        if not partitions_file.exists() or not partitions_file.read_text().strip():
             try:
-                partitions = actions.list_partitions()
+                lvm_type = actions.get_lvm_type()
+                if not lvm_type:
+                    self.show_toast("No LVM volume group found")
+                    return
+
+                rootfs = f"{lvm_type}-rootfs"
+                if rootfs not in actions.list_partitions():
+                    self.show_toast("Current rootfs partition not found")
+                    return
+
+                # Initialize the current rootfs when the file is missing or empty.
+                partitions = [rootfs]
                 success, message = actions.write_partitions_file(partitions)
                 if not success:
                     self.show_toast(message)
